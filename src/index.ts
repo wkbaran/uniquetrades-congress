@@ -7,6 +7,8 @@ import { fetchTradesCommand } from "./commands/fetch-trades.js";
 import { analyzeCommand } from "./commands/analyze.js";
 import { statusCommand } from "./commands/status.js";
 import { runCommand } from "./commands/run.js";
+import { listCommitteesCommand } from "./commands/list-committees.js";
+import { listTradesCommand } from "./commands/list-trades.js";
 
 // Load environment variables
 config();
@@ -24,6 +26,8 @@ program.addCommand(fetchTradesCommand);
 program.addCommand(analyzeCommand);
 program.addCommand(statusCommand);
 program.addCommand(runCommand);
+program.addCommand(listCommitteesCommand);
+program.addCommand(listTradesCommand);
 
 // Parse arguments
 program.parse();
