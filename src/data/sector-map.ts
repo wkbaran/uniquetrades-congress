@@ -2,27 +2,37 @@
  * Committee Sector Map
  *
  * Implements the CommitteeSectorMap interface for the scoring module.
- * Wraps existing committee-sector mapping logic.
+ * Uses FMP sector/industry taxonomy for committee relevance detection.
  */
 
 import type { CommitteeSectorMap } from "../scoring/types.js";
-import type { MarketSector, CommitteeSectorMapping } from "../types/index.js";
-import { inferStockSector } from "../mappings/committee-sectors.js";
+import {
+  getCommitteeSectors,
+  getCommitteeIndustries,
+  hasCommitteeOverlap,
+} from "./committee-sector-taxonomy.js";
 
 export class CommitteeSectorMapImpl implements CommitteeSectorMap {
-  private committeeToSectors = new Map<string, MarketSector[]>();
-
-  constructor(sectorMappings: CommitteeSectorMapping[]) {
-    for (const mapping of sectorMappings) {
-      this.committeeToSectors.set(mapping.committeeId, mapping.sectors);
-    }
+  getCommitteeSectors(committeeId: string): string[] {
+    return getCommitteeSectors(committeeId);
   }
 
-  getCommitteeSectors(committeeId: string): MarketSector[] {
-    return this.committeeToSectors.get(committeeId) || [];
+  getCommitteeIndustries(committeeId: string): string[] {
+    return getCommitteeIndustries(committeeId);
   }
 
-  getStockSectors(symbol: string, description: string): MarketSector[] {
-    return inferStockSector(description, symbol);
+  hasOverlap(
+    committeeId: string,
+    sector: string | null,
+    industry: string | null
+  ): boolean {
+    return hasCommitteeOverlap(committeeId, sector, industry);
   }
+}
+
+/**
+ * Create a sector map instance
+ */
+export function createSectorMap(): CommitteeSectorMap {
+  return new CommitteeSectorMapImpl();
 }

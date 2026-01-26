@@ -35,7 +35,7 @@ export function scoreTrade(
     marketCapScore: scoreMarketCap(marketData, config),
     convictionScore: scoreConviction(trade, traderHistory, config),
     rarityScore: scoreRarity(tradingPattern, config),
-    committeeRelevanceScore: scoreCommitteeRelevance(trade, trader, sectorMap),
+    committeeRelevanceScore: scoreCommitteeRelevance(trader, marketData, sectorMap),
     derivativeScore: scoreDerivative(trade),
     ownershipScore: scoreOwnership(trade),
   };
@@ -182,41 +182,39 @@ function scoreRarity(
 
 /**
  * Score based on committee relevance - trading in sectors you regulate = higher score
+ * Uses FMP sector/industry data from MarketData
  */
 function scoreCommitteeRelevance(
-  trade: TradeInput,
   trader: TraderInput,
+  marketData: MarketData | null,
   sectorMap: CommitteeSectorMap | null
 ): number {
-  if (!sectorMap || !trade.symbol || trader.committees.length === 0) {
+  if (!sectorMap || trader.committees.length === 0) {
     return 0;
   }
 
-  const stockSectors = sectorMap.getStockSectors(
-    trade.symbol,
-    trade.assetDescription || ""
-  );
+  const sector = marketData?.sector ?? null;
+  const industry = marketData?.industry ?? null;
 
-  if (stockSectors.length === 0) {
+  // If we don't have sector/industry data, can't score
+  if (!sector && !industry) {
     return 0;
   }
 
-  // Get all sectors covered by trader's committees
-  const traderSectors = new Set<string>();
+  // Count how many of the trader's committees have jurisdiction
+  let overlappingCommittees = 0;
   for (const committeeId of trader.committees) {
-    const sectors = sectorMap.getCommitteeSectors(committeeId);
-    sectors.forEach((s) => traderSectors.add(s));
+    if (sectorMap.hasOverlap(committeeId, sector, industry)) {
+      overlappingCommittees++;
+    }
   }
 
-  // Check for overlap
-  const overlapping = stockSectors.filter((s) => traderSectors.has(s));
-
-  if (overlapping.length === 0) {
+  if (overlappingCommittees === 0) {
     return 0;
-  } else if (overlapping.length >= 2) {
-    return 100; // Multiple sector overlaps
+  } else if (overlappingCommittees >= 2) {
+    return 100; // Multiple committee overlaps
   } else {
-    return 75; // Single sector overlap
+    return 75; // Single committee overlap
   }
 }
 
@@ -328,23 +326,23 @@ function buildExplanation(
   }
 
   // Committee relevance explanation
-  if (sectorMap && trade.symbol && trader.committees.length > 0) {
-    const stockSectors = sectorMap.getStockSectors(
-      trade.symbol,
-      trade.assetDescription || ""
-    );
-    const traderSectors = new Set<string>();
-    for (const committeeId of trader.committees) {
-      const sectors = sectorMap.getCommitteeSectors(committeeId);
-      sectors.forEach((s) => traderSectors.add(s));
-    }
-    const overlapping = stockSectors.filter((s) => traderSectors.has(s));
+  if (sectorMap && trader.committees.length > 0) {
+    const sector = marketData?.sector ?? null;
+    const industry = marketData?.industry ?? null;
 
-    if (overlapping.length > 0) {
+    const overlappingCommittees: string[] = [];
+    for (const committeeId of trader.committees) {
+      if (sectorMap.hasOverlap(committeeId, sector, industry)) {
+        overlappingCommittees.push(committeeId);
+      }
+    }
+
+    if (overlappingCommittees.length > 0) {
       explanation.committeeRelevance = {
         traderCommittees: trader.committees,
-        stockSectors,
-        overlappingSectors: overlapping,
+        stockSector: sector,
+        stockIndustry: industry,
+        overlappingCommittees,
       };
     }
   }

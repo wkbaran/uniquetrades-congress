@@ -10,13 +10,14 @@ import type {
   TradeInput,
   TraderInput,
   TraderHistory,
+  MarketData,
   UniquenessResult,
   ScoringConfig,
 } from "../scoring/types.js";
 import { scoreTrade, DEFAULT_SCORING_CONFIG } from "../scoring/index.js";
 import type { MarketDataProvider } from "../data/types.js";
 import { CongressionalPatternAnalyzer } from "../data/pattern-analyzer.js";
-import { CommitteeSectorMapImpl } from "../data/sector-map.js";
+import { createSectorMap } from "../data/sector-map.js";
 import {
   findMemberByName,
   getMemberCommittees,
@@ -131,10 +132,8 @@ export async function analyzeTrades(
     `  Symbol stats: ${patternStats.uniqueSymbols} unique, ${patternStats.rareSymbols} rare, ${patternStats.commonSymbols} common`
   );
 
-  // Build sector map if committee data available
-  const sectorMap = committeeData
-    ? new CommitteeSectorMapImpl(committeeData.sectorMappings)
-    : null;
+  // Build sector map (uses FMP sector/industry taxonomy)
+  const sectorMap = createSectorMap();
 
   // Build trader histories
   const traderHistories = buildTraderHistories(allTrades);
@@ -150,7 +149,7 @@ export async function analyzeTrades(
   ];
 
   // Fetch market data if provider available
-  let marketDataMap = new Map<string, { marketCap: number | null }>();
+  let marketDataMap = new Map<string, MarketData>();
   if (marketDataProvider) {
     console.log(`  Fetching market data from ${marketDataProvider.getName()}...`);
     marketDataMap = await marketDataProvider.getMarketDataBatch(symbols);
@@ -354,8 +353,9 @@ export function formatTradeReport(analyzed: AnalyzedTrade): string {
   // Committee relevance
   if (score.flags.hasCommitteeRelevance && score.explanation.committeeRelevance) {
     const rel = score.explanation.committeeRelevance;
+    const sectorInfo = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
     lines.push(
-      `     ⚠️ Committee Relevance: ${rel.overlappingSectors.join(", ")}`
+      `     ⚠️ Committee Relevance: ${sectorInfo} (${rel.overlappingCommittees.join(", ")})`
     );
   }
 
