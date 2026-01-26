@@ -1,10 +1,13 @@
 import {
   CommitteesResponseSchema,
   CommitteeMembershipResponseSchema,
+  LegislatorsResponseSchema,
   type Committee,
   type CommitteeMembershipResponse,
   type CommitteeData,
   type CommitteeSectorMapping,
+  type Legislator,
+  type LegislatorPartyMap,
 } from "../types/index.js";
 import { mapCommitteeToSectors } from "../mappings/committee-sectors.js";
 import { saveData, loadData } from "../utils/storage.js";
@@ -13,9 +16,12 @@ const COMMITTEES_URL =
   "https://unitedstates.github.io/congress-legislators/committees-current.json";
 const MEMBERSHIP_URL =
   "https://unitedstates.github.io/congress-legislators/committee-membership-current.json";
+const LEGISLATORS_URL =
+  "https://unitedstates.github.io/congress-legislators/legislators-current.json";
 
 const COMMITTEES_FILE = "committees.json";
 const MEMBERSHIP_FILE = "membership.json";
+const LEGISLATORS_FILE = "legislators.json";
 const COMMITTEE_DATA_FILE = "committee-data.json";
 
 /**
@@ -68,6 +74,69 @@ export async function fetchMembership(): Promise<CommitteeMembershipResponse> {
 }
 
 /**
+ * Fetch current legislators from congress-legislators
+ */
+export async function fetchLegislators(): Promise<Legislator[]> {
+  const response = await fetch(LEGISLATORS_URL);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch legislators: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const data = await response.json();
+  const legislators = LegislatorsResponseSchema.parse(data);
+
+  await saveData(LEGISLATORS_FILE, legislators);
+  console.log(`Fetched and saved ${legislators.length} legislators`);
+
+  return legislators;
+}
+
+/**
+ * Load cached legislators data
+ */
+export async function loadLegislators(): Promise<Legislator[] | null> {
+  const stored = await loadData<Legislator[]>(LEGISLATORS_FILE);
+  return stored?.data || null;
+}
+
+/**
+ * Build a map of bioguide ID to party name from legislators data
+ * Uses the most recent term's party affiliation
+ */
+export function buildPartyMap(legislators: Legislator[]): LegislatorPartyMap {
+  const partyMap: LegislatorPartyMap = new Map();
+
+  for (const legislator of legislators) {
+    const bioguide = legislator.id.bioguide;
+    // Get the most recent term (last in the array)
+    const currentTerm = legislator.terms[legislator.terms.length - 1];
+    if (currentTerm) {
+      partyMap.set(bioguide, currentTerm.party);
+    }
+  }
+
+  return partyMap;
+}
+
+/**
+ * Get party for a member by bioguide ID
+ * Falls back to the provided fallback (e.g., "majority"/"minority") if not found
+ */
+export function getMemberParty(
+  bioguideId: string | undefined,
+  partyMap: LegislatorPartyMap | null,
+  fallback?: string
+): string {
+  if (!bioguideId || !partyMap) {
+    return fallback || "Unknown";
+  }
+  return partyMap.get(bioguideId) || fallback || "Unknown";
+}
+
+/**
  * Generate sector mappings for all committees
  */
 export function generateSectorMappings(
@@ -111,6 +180,15 @@ export async function fetchAllCommitteeData(): Promise<CommitteeData> {
     fetchMembership(),
   ]);
 
+  // Try to fetch legislators for party info, but don't fail if it errors
+  let legislators: Legislator[] | undefined;
+  try {
+    legislators = await fetchLegislators();
+  } catch (error) {
+    console.warn("Warning: Could not fetch legislators data:", error);
+    console.warn("Party affiliations will show as majority/minority");
+  }
+
   console.log("Generating sector mappings...");
   const sectorMappings = generateSectorMappings(committees);
 
@@ -125,6 +203,7 @@ export async function fetchAllCommitteeData(): Promise<CommitteeData> {
     committees,
     membership,
     sectorMappings,
+    legislators,
   };
 
   await saveData(COMMITTEE_DATA_FILE, committeeData);
