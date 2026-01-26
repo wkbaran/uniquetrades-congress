@@ -154,18 +154,11 @@ export const listCommitteesCommand = new Command("list:committees")
             );
           }
 
-          // Show first 8 other members
-          const displayMembers = others.slice(0, 8);
-          for (const member of displayMembers) {
+          // Show all other members
+          for (const member of others) {
             const partyTag = member.party ? ` (${member.party})` : "";
             console.log(
               `  │ ${formatCell(`        ${member.name}${partyTag}`, 74)} │`
-            );
-          }
-
-          if (others.length > 8) {
-            console.log(
-              `  │ ${formatCell(`        ... and ${others.length - 8} more members`, 74)} │`
             );
           }
         } else {
