@@ -2,25 +2,25 @@ import { Command } from "commander";
 import { loadTrades } from "../services/trade-service.js";
 import { loadCommitteeData } from "../services/committee-service.js";
 import { analyzeTrades, formatTradeReport } from "../services/analysis-service.js";
-import { createFMPClient } from "../services/fmp-client.js";
-import type { AnalysisConfig } from "../types/index.js";
+import { createFMPProvider } from "../data/fmp-provider.js";
+import type { ScoringConfig } from "../scoring/types.js";
+import { DEFAULT_SCORING_CONFIG } from "../scoring/types.js";
 
 export const analyzeCommand = new Command("analyze")
   .description("Analyze trades and identify unique opportunities")
   .option(
     "--min-score <number>",
-    "Minimum uniqueness score to include",
-    "50"
-  )
-  .option(
-    "--market-cap <number>",
-    "Market cap threshold in billions",
-    "2"
+    "Minimum uniqueness score to show",
+    "40"
   )
   .option(
     "--top <number>",
     "Show top N results",
     "10"
+  )
+  .option(
+    "--no-market-data",
+    "Skip fetching market data (faster, but no market cap scoring)"
   )
   .option(
     "--json",
@@ -48,26 +48,26 @@ export const analyzeCommand = new Command("analyze")
         console.warn("   Run 'fetch:committees' to enable committee relevance analysis.\n");
       }
 
-      // Build config from options
-      const config: AnalysisConfig = {
-        marketCapThreshold: parseFloat(options.marketCap) * 1_000_000_000,
-        volumeThresholdMultiplier: 0.1,
-        convictionThresholdMultiplier: 2,
-        minUniquenessScore: parseInt(options.minScore, 10),
+      console.log("Running analysis...\n");
+
+      // Create market data provider if enabled
+      const marketDataProvider = options.marketData
+        ? createFMPProvider()
+        : null;
+
+      if (!marketDataProvider) {
+        console.log("Market data fetching disabled (use without --no-market-data to enable)\n");
+      }
+
+      const config: ScoringConfig = {
+        ...DEFAULT_SCORING_CONFIG,
       };
 
-      console.log("Running analysis...\n");
-      console.log(`Configuration:`);
-      console.log(`  - Min Score: ${config.minUniquenessScore}`);
-      console.log(`  - Market Cap Threshold: $${options.marketCap}B`);
-      console.log("");
-
-      const fmpClient = createFMPClient();
       const report = await analyzeTrades(
         tradeData.senateTrades,
         tradeData.houseTrades,
         committeeData,
-        fmpClient,
+        marketDataProvider,
         config
       );
 
@@ -77,56 +77,51 @@ export const analyzeCommand = new Command("analyze")
       }
 
       // Display results
+      const minScore = parseInt(options.minScore, 10);
+      const topN = parseInt(options.top, 10);
+
+      const filteredTrades = report.scoredTrades.filter(
+        (t) => t.score.overallScore >= minScore
+      );
+
       console.log("\n" + "=".repeat(60));
       console.log("UNIQUE TRADES ANALYSIS REPORT");
       console.log("=".repeat(60));
       console.log(`Generated: ${report.generatedAt}`);
       console.log(`Total Trades Analyzed: ${report.totalTradesAnalyzed}`);
-      console.log(`Unique Trades Found: ${report.uniqueTrades.length}`);
+      console.log(`Trades Scoring >= ${minScore}: ${filteredTrades.length}`);
+      console.log(`Symbol Stats: ${report.summary.symbolStats.uniqueSymbols} unique, ${report.summary.symbolStats.rareSymbols} rare`);
       console.log("");
 
-      const topN = parseInt(options.top, 10);
-      console.log(`\n📈 TOP ${topN} UNIQUE TRADES:\n`);
+      console.log(`\n📈 TOP ${Math.min(topN, filteredTrades.length)} TRADES (score >= ${minScore}):\n`);
 
-      for (const tradeReport of report.summary.topByScore.slice(0, topN)) {
-        console.log(formatTradeReport(tradeReport));
+      for (const analyzed of filteredTrades.slice(0, topN)) {
+        console.log(formatTradeReport(analyzed));
         console.log("");
       }
 
-      // Summary by member
-      const memberEntries = Object.entries(report.summary.byMember);
-      if (memberEntries.length > 0) {
-        console.log("\n👤 TRADES BY MEMBER:\n");
-        const sortedMembers = memberEntries
-          .map(([name, trades]) => ({
-            name,
-            count: trades.length,
-            avgScore:
-              trades.reduce((sum, t) => sum + t.score.overall, 0) / trades.length,
-          }))
-          .sort((a, b) => b.avgScore - a.avgScore)
-          .slice(0, 10);
-
-        for (const member of sortedMembers) {
+      // Rare stocks section
+      if (report.summary.byRarity.length > 0) {
+        console.log("\n🔍 RARE STOCK TRADES (few congress trades):\n");
+        for (const analyzed of report.summary.byRarity.slice(0, 5)) {
+          const rarity = analyzed.score.explanation.rarity;
           console.log(
-            `   ${member.name}: ${member.count} unique trades (avg score: ${member.avgScore.toFixed(1)})`
+            `   ${analyzed.trade.symbol}: ${analyzed.trade.firstName} ${analyzed.trade.lastName} - ${rarity?.category} (${rarity?.totalCongressTrades} total trades)`
           );
         }
       }
 
-      // Summary by sector
-      const sectorEntries = Object.entries(report.summary.bySector);
-      if (sectorEntries.length > 0) {
-        console.log("\n🏭 TRADES BY SECTOR:\n");
-        const sortedSectors = sectorEntries
-          .map(([sector, trades]) => ({
-            sector,
-            count: trades.length,
-          }))
-          .sort((a, b) => b.count - a.count);
-
-        for (const { sector, count } of sortedSectors) {
-          console.log(`   ${sector}: ${count} trades`);
+      // Committee relevance section
+      if (report.summary.byCommitteeRelevance.length > 0) {
+        console.log("\n⚠️  COMMITTEE-RELEVANT TRADES:\n");
+        for (const analyzed of report.summary.byCommitteeRelevance.slice(0, 5)) {
+          const rel = analyzed.score.explanation.committeeRelevance;
+          console.log(
+            `   ${analyzed.trade.symbol}: ${analyzed.trade.firstName} ${analyzed.trade.lastName}`
+          );
+          if (rel) {
+            console.log(`      Sectors: ${rel.overlappingSectors.join(", ")}`);
+          }
         }
       }
 

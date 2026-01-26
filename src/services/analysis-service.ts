@@ -1,38 +1,68 @@
+/**
+ * Analysis Service
+ *
+ * Orchestrates the scoring of congressional trades using the modular
+ * scoring and data provider components.
+ */
+
+import type { FMPTrade, CommitteeData } from "../types/index.js";
+import type {
+  TradeInput,
+  TraderInput,
+  TraderHistory,
+  UniquenessResult,
+  ScoringConfig,
+} from "../scoring/types.js";
+import { scoreTrade, DEFAULT_SCORING_CONFIG } from "../scoring/index.js";
+import type { MarketDataProvider } from "../data/types.js";
+import { CongressionalPatternAnalyzer } from "../data/pattern-analyzer.js";
+import { CommitteeSectorMapImpl } from "../data/sector-map.js";
 import {
-  DEFAULT_ANALYSIS_CONFIG,
-  type FMPTrade,
-  type EnrichedTrade,
-  type CongressMemberProfile,
-  type UniquenessScore,
-  type UniquenessFactors,
-  type UniqueTradeReport,
-  type AnalysisReport,
-  type CommitteeData,
-  type AnalysisConfig,
-  type MarketSector,
-} from "../types/index.js";
-import { FMPClient } from "./fmp-client.js";
-import {
-  inferStockSector,
-  hasRelevantCommitteeExposure,
-} from "../mappings/committee-sectors.js";
-import {
-  getMemberCommittees,
   findMemberByName,
+  getMemberCommittees,
 } from "./committee-service.js";
 import { saveReport } from "../utils/storage.js";
 
+// ============================================
+// Types for analysis results
+// ============================================
+
+export interface AnalyzedTrade {
+  trade: FMPTrade;
+  chamber: "senate" | "house";
+  trader: TraderInput;
+  score: UniquenessResult;
+}
+
+export interface AnalysisReport {
+  generatedAt: string;
+  config: ScoringConfig;
+  totalTradesAnalyzed: number;
+  scoredTrades: AnalyzedTrade[];
+  summary: {
+    topByScore: AnalyzedTrade[];
+    byRarity: AnalyzedTrade[];
+    byCommitteeRelevance: AnalyzedTrade[];
+    symbolStats: {
+      totalSymbols: number;
+      uniqueSymbols: number;
+      rareSymbols: number;
+    };
+  };
+}
+
+// ============================================
+// Trade conversion helpers
+// ============================================
+
 /**
  * Parse FMP amount string to numeric range
- * Amounts come as "$1,001 - $15,000" or similar
  */
-function parseAmountRange(amount: string | undefined): {
-  low: number;
-  high: number;
-} | null {
+function parseAmountRange(
+  amount: string | undefined
+): { low: number; high: number } | null {
   if (!amount) return null;
 
-  // Remove $ and commas, then extract numbers
   const cleaned = amount.replace(/[$,]/g, "");
   const numbers = cleaned.match(/(\d+)/g);
 
@@ -50,374 +80,297 @@ function parseAmountRange(amount: string | undefined): {
 }
 
 /**
- * Create a unique member ID from trade data
+ * Convert FMP trade to TradeInput
  */
-function getMemberId(trade: FMPTrade, chamber: "senate" | "house"): string {
+function toTradeInput(trade: FMPTrade): TradeInput {
+  return {
+    symbol: trade.symbol || null,
+    assetDescription: trade.assetDescription || null,
+    assetType: trade.assetType || null,
+    type: trade.type || null,
+    amount: parseAmountRange(trade.amount),
+    transactionDate: trade.transactionDate || null,
+    owner: trade.owner || null,
+  };
+}
+
+/**
+ * Create trader ID from trade
+ */
+function getTraderId(trade: FMPTrade, chamber: "senate" | "house"): string {
   const first = (trade.firstName || "").toLowerCase().trim();
   const last = (trade.lastName || "").toLowerCase().trim();
   return `${chamber}-${first}-${last}`;
 }
 
-/**
- * Enrich trades with additional data
- */
-export async function enrichTrades(
-  trades: FMPTrade[],
-  chamber: "senate" | "house",
-  fmpClient: FMPClient
-): Promise<EnrichedTrade[]> {
-  // Extract unique symbols
-  const symbols = [
-    ...new Set(
-      trades
-        .map((t) => t.symbol)
-        .filter((s): s is string => !!s && s.length > 0)
-    ),
-  ];
+// ============================================
+// Main analysis function
+// ============================================
 
-  console.log(`Fetching quotes for ${symbols.length} unique symbols...`);
-  const quotes = await fmpClient.getQuotes(symbols);
-
-  return trades.map((trade) => {
-    const quote = trade.symbol ? quotes.get(trade.symbol) : undefined;
-    const amountRange = parseAmountRange(trade.amount);
-
-    return {
-      ...trade,
-      congressMemberId: getMemberId(trade, chamber),
-      chamber,
-      marketCap: quote?.marketCap,
-      avgVolume: quote?.avgVolume,
-      currentPrice: quote?.price,
-      amountLow: amountRange?.low,
-      amountHigh: amountRange?.high,
-    };
-  });
-}
-
-/**
- * Build member profiles from trades
- */
-export function buildMemberProfiles(
-  trades: EnrichedTrade[],
-  committeeData: CommitteeData | null
-): Map<string, CongressMemberProfile> {
-  const profiles = new Map<string, CongressMemberProfile>();
-
-  for (const trade of trades) {
-    let profile = profiles.get(trade.congressMemberId);
-
-    if (!profile) {
-      // Try to find bioguide ID for committee lookup
-      let committees: string[] = [];
-      if (committeeData && trade.firstName && trade.lastName) {
-        const bioguideId = findMemberByName(
-          trade.firstName,
-          trade.lastName,
-          committeeData.membership
-        );
-        if (bioguideId) {
-          committees = getMemberCommittees(bioguideId, committeeData.membership);
-        }
-      }
-
-      profile = {
-        id: trade.congressMemberId,
-        firstName: trade.firstName || "",
-        lastName: trade.lastName || "",
-        chamber: trade.chamber,
-        committees,
-        trades: [],
-        totalTrades: 0,
-      };
-      profiles.set(trade.congressMemberId, profile);
-    }
-
-    profile.trades.push(trade);
-    profile.totalTrades++;
-  }
-
-  // Calculate average trade sizes
-  for (const profile of profiles.values()) {
-    const tradeSizes = profile.trades
-      .map((t) => (t.amountLow && t.amountHigh ? (t.amountLow + t.amountHigh) / 2 : null))
-      .filter((s): s is number => s !== null);
-
-    if (tradeSizes.length > 0) {
-      profile.averageTradeSize =
-        tradeSizes.reduce((a, b) => a + b, 0) / tradeSizes.length;
-    }
-  }
-
-  return profiles;
-}
-
-/**
- * Calculate uniqueness score for a trade
- */
-export function calculateUniquenessScore(
-  trade: EnrichedTrade,
-  memberProfile: CongressMemberProfile,
-  config: AnalysisConfig
-): UniquenessScore {
-  const factors: UniquenessFactors = {
-    isSmallCap: false,
-    isBelowAvgVolume: false,
-    isHighConviction: false,
-  };
-
-  let marketCapScore = 0;
-  let volumeScore = 0;
-  let convictionScore = 0;
-  let relativeVolumeScore = 0;
-
-  // Market cap scoring (0-25 points)
-  if (trade.marketCap !== undefined) {
-    factors.marketCap = trade.marketCap;
-    if (trade.marketCap < config.marketCapThreshold) {
-      factors.isSmallCap = true;
-      // Scale: smaller cap = higher score
-      // < $500M = 25, < $1B = 20, < $2B = 15
-      if (trade.marketCap < 500_000_000) {
-        marketCapScore = 25;
-      } else if (trade.marketCap < 1_000_000_000) {
-        marketCapScore = 20;
-      } else {
-        marketCapScore = 15;
-      }
-    }
-  }
-
-  // Volume scoring (0-25 points)
-  // Compare trade size to stock's average daily volume
-  if (trade.avgVolume !== undefined && trade.amountHigh && trade.currentPrice) {
-    factors.avgVolume = trade.avgVolume;
-    // Estimate shares traded from dollar amount
-    const estimatedShares = trade.amountHigh / trade.currentPrice;
-    const volumeRatio = estimatedShares / trade.avgVolume;
-    factors.relativeToAvgVolume = volumeRatio;
-
-    if (volumeRatio > config.volumeThresholdMultiplier) {
-      factors.isBelowAvgVolume = true; // Trade is significant vs avg volume
-      // Scale based on how significant
-      if (volumeRatio > 0.5) {
-        relativeVolumeScore = 25;
-      } else if (volumeRatio > 0.25) {
-        relativeVolumeScore = 20;
-      } else if (volumeRatio > 0.1) {
-        relativeVolumeScore = 15;
-      } else {
-        relativeVolumeScore = 10;
-      }
-    }
-  }
-
-  // Conviction scoring (0-25 points)
-  // Compare trade size to member's typical trade size
-  if (
-    trade.amountLow &&
-    trade.amountHigh &&
-    memberProfile.averageTradeSize
-  ) {
-    factors.tradeAmount = { low: trade.amountLow, high: trade.amountHigh };
-    factors.memberAvgTradeSize = memberProfile.averageTradeSize;
-
-    const tradeSize = (trade.amountLow + trade.amountHigh) / 2;
-    const convictionRatio = tradeSize / memberProfile.averageTradeSize;
-
-    if (convictionRatio >= config.convictionThresholdMultiplier) {
-      factors.isHighConviction = true;
-      // Scale based on conviction level
-      if (convictionRatio >= 5) {
-        convictionScore = 25;
-      } else if (convictionRatio >= 3) {
-        convictionScore = 20;
-      } else if (convictionRatio >= 2) {
-        convictionScore = 15;
-      }
-    }
-  }
-
-  // Stock volume below average (0-25 points)
-  // This is different from relative volume - it's about the stock's volume being low
-  // Making the trade harder to execute without impact
-  if (trade.avgVolume !== undefined) {
-    // Low volume stocks (< 500k daily avg) are harder to trade
-    if (trade.avgVolume < 100_000) {
-      volumeScore = 25;
-    } else if (trade.avgVolume < 250_000) {
-      volumeScore = 20;
-    } else if (trade.avgVolume < 500_000) {
-      volumeScore = 15;
-    } else if (trade.avgVolume < 1_000_000) {
-      volumeScore = 10;
-    }
-  }
-
-  const overall =
-    marketCapScore + volumeScore + convictionScore + relativeVolumeScore;
-
-  return {
-    overall,
-    marketCapScore,
-    volumeScore,
-    convictionScore,
-    relativeVolumeScore,
-    factors,
-  };
-}
-
-/**
- * Analyze trades and generate unique trade reports
- */
 export async function analyzeTrades(
   senateTrades: FMPTrade[],
   houseTrades: FMPTrade[],
   committeeData: CommitteeData | null,
-  fmpClient: FMPClient,
-  config: AnalysisConfig = DEFAULT_ANALYSIS_CONFIG
+  marketDataProvider: MarketDataProvider | null,
+  config: ScoringConfig = DEFAULT_SCORING_CONFIG
 ): Promise<AnalysisReport> {
+  const allTrades = [
+    ...senateTrades.map((t) => ({ trade: t, chamber: "senate" as const })),
+    ...houseTrades.map((t) => ({ trade: t, chamber: "house" as const })),
+  ];
+
+  console.log(`Analyzing ${allTrades.length} total trades...`);
+
+  // Build trading pattern analyzer from all trades
+  const patternAnalyzer = new CongressionalPatternAnalyzer([
+    ...senateTrades,
+    ...houseTrades,
+  ]);
+  const patternStats = patternAnalyzer.getStats();
   console.log(
-    `Analyzing ${senateTrades.length} Senate trades and ${houseTrades.length} House trades...`
+    `  Symbol stats: ${patternStats.uniqueSymbols} unique, ${patternStats.rareSymbols} rare, ${patternStats.commonSymbols} common`
   );
 
-  // Enrich trades with market data - run sequentially to avoid rate limiting
-  console.log("Enriching Senate trades...");
-  const enrichedSenate = await enrichTrades(senateTrades, "senate", fmpClient);
+  // Build sector map if committee data available
+  const sectorMap = committeeData
+    ? new CommitteeSectorMapImpl(committeeData.sectorMappings)
+    : null;
 
-  console.log("Enriching House trades...");
-  const enrichedHouse = await enrichTrades(houseTrades, "house", fmpClient);
+  // Build trader histories
+  const traderHistories = buildTraderHistories(allTrades);
+  console.log(`  Built histories for ${traderHistories.size} traders`);
 
-  const allTrades = [...enrichedSenate, ...enrichedHouse];
+  // Get unique symbols for market data fetch
+  const symbols = [
+    ...new Set(
+      allTrades
+        .map((t) => t.trade.symbol)
+        .filter((s): s is string => !!s && s.length > 0)
+    ),
+  ];
 
-  // Build member profiles
-  const memberProfiles = buildMemberProfiles(allTrades, committeeData);
-  console.log(`Built profiles for ${memberProfiles.size} congress members`);
+  // Fetch market data if provider available
+  let marketDataMap = new Map<string, { marketCap: number | null }>();
+  if (marketDataProvider) {
+    console.log(`  Fetching market data from ${marketDataProvider.getName()}...`);
+    marketDataMap = await marketDataProvider.getMarketDataBatch(symbols);
+  } else {
+    console.log(`  No market data provider - skipping market cap scoring`);
+  }
 
-  // Calculate uniqueness scores
-  const uniqueTradeReports: UniqueTradeReport[] = [];
+  // Score each trade
+  console.log(`  Scoring trades...`);
+  const scoredTrades: AnalyzedTrade[] = [];
 
-  for (const trade of allTrades) {
-    const profile = memberProfiles.get(trade.congressMemberId);
-    if (!profile) continue;
+  for (const { trade, chamber } of allTrades) {
+    const traderId = getTraderId(trade, chamber);
+    const traderHistory = traderHistories.get(traderId);
 
-    const score = calculateUniquenessScore(trade, profile, config);
+    if (!traderHistory) continue;
 
-    // Skip trades below minimum score
-    if (score.overall < config.minUniquenessScore) continue;
+    // Build trader info
+    const trader = buildTraderInput(trade, chamber, committeeData);
 
-    // Determine committee relevance
-    let committeeRelevance: UniqueTradeReport["committeeRelevance"];
-    if (committeeData && trade.assetDescription) {
-      const stockSectors = inferStockSector(trade.assetDescription, trade.symbol);
-      if (stockSectors.length > 0 && profile.committees.length > 0) {
-        const relevance = hasRelevantCommitteeExposure(
-          profile.committees,
-          stockSectors,
-          committeeData.sectorMappings
-        );
-        if (relevance.relevant) {
-          committeeRelevance = {
-            committees: relevance.committees,
-            sectors: relevance.sectors,
-            potentialInsight: true,
-          };
-        }
-      }
-    }
+    // Get market data
+    const marketData = trade.symbol
+      ? marketDataMap.get(trade.symbol) || null
+      : null;
 
-    uniqueTradeReports.push({
+    // Get trading pattern
+    const pattern = trade.symbol
+      ? patternAnalyzer.getPattern(trade.symbol)
+      : null;
+
+    // Score the trade
+    const score = scoreTrade(
+      toTradeInput(trade),
+      trader,
+      traderHistory,
+      marketData,
+      pattern,
+      sectorMap,
+      config
+    );
+
+    scoredTrades.push({
       trade,
+      chamber,
+      trader,
       score,
-      memberProfile: profile,
-      committeeRelevance,
     });
   }
 
-  // Sort by score descending
-  uniqueTradeReports.sort((a, b) => b.score.overall - a.score.overall);
-
-  console.log(
-    `Found ${uniqueTradeReports.length} unique trades (score >= ${config.minUniquenessScore})`
-  );
+  // Sort by overall score
+  scoredTrades.sort((a, b) => b.score.overallScore - a.score.overallScore);
 
   // Build summary
-  const byMember: Record<string, UniqueTradeReport[]> = {};
-  const bySector: Record<string, UniqueTradeReport[]> = {};
+  const topByScore = scoredTrades.slice(0, 20);
 
-  for (const report of uniqueTradeReports) {
-    const memberName = `${report.trade.firstName} ${report.trade.lastName}`;
-    if (!byMember[memberName]) {
-      byMember[memberName] = [];
-    }
-    byMember[memberName].push(report);
+  const byRarity = [...scoredTrades]
+    .filter((t) => t.score.flags.isRareStock)
+    .sort((a, b) => b.score.factors.rarityScore - a.score.factors.rarityScore)
+    .slice(0, 20);
 
-    if (report.committeeRelevance) {
-      for (const sector of report.committeeRelevance.sectors) {
-        if (!bySector[sector]) {
-          bySector[sector] = [];
-        }
-        bySector[sector].push(report);
-      }
-    }
-  }
+  const byCommitteeRelevance = [...scoredTrades]
+    .filter((t) => t.score.flags.hasCommitteeRelevance)
+    .sort(
+      (a, b) =>
+        b.score.factors.committeeRelevanceScore -
+        a.score.factors.committeeRelevanceScore
+    )
+    .slice(0, 20);
 
-  const analysisReport: AnalysisReport = {
+  const report: AnalysisReport = {
     generatedAt: new Date().toISOString(),
+    config,
     totalTradesAnalyzed: allTrades.length,
-    uniqueTrades: uniqueTradeReports,
+    scoredTrades,
     summary: {
-      topByScore: uniqueTradeReports.slice(0, 20),
-      byMember,
-      bySector,
+      topByScore,
+      byRarity,
+      byCommitteeRelevance,
+      symbolStats: patternStats,
     },
   };
 
   // Save report
-  const reportPath = await saveReport("unique-trades", analysisReport);
-  console.log(`Report saved to ${reportPath}`);
+  const reportPath = await saveReport("unique-trades", report);
+  console.log(`\nReport saved to ${reportPath}`);
 
-  return analysisReport;
+  return report;
 }
 
-/**
- * Format a unique trade report for display
- */
-export function formatTradeReport(report: UniqueTradeReport): string {
-  const { trade, score, committeeRelevance } = report;
+// ============================================
+// Helper functions
+// ============================================
+
+function buildTraderHistories(
+  trades: { trade: FMPTrade; chamber: "senate" | "house" }[]
+): Map<string, TraderHistory> {
+  const histories = new Map<string, TraderHistory>();
+
+  // Group trades by trader
+  const traderTrades = new Map<string, TradeInput[]>();
+
+  for (const { trade, chamber } of trades) {
+    const traderId = getTraderId(trade, chamber);
+
+    if (!traderTrades.has(traderId)) {
+      traderTrades.set(traderId, []);
+    }
+    traderTrades.get(traderId)!.push(toTradeInput(trade));
+  }
+
+  // Build histories
+  for (const [traderId, tradeInputs] of traderTrades) {
+    const amounts = tradeInputs
+      .map((t) => (t.amount ? (t.amount.low + t.amount.high) / 2 : null))
+      .filter((a): a is number => a !== null);
+
+    const averageTradeSize =
+      amounts.length > 0
+        ? amounts.reduce((a, b) => a + b, 0) / amounts.length
+        : null;
+
+    histories.set(traderId, {
+      visibleTrades: tradeInputs,
+      averageTradeSize,
+      totalTradeCount: tradeInputs.length,
+    });
+  }
+
+  return histories;
+}
+
+function buildTraderInput(
+  trade: FMPTrade,
+  chamber: "senate" | "house",
+  committeeData: CommitteeData | null
+): TraderInput {
+  const traderId = getTraderId(trade, chamber);
+
+  // Find committees
+  let committees: string[] = [];
+  if (committeeData && trade.firstName && trade.lastName) {
+    const bioguideId = findMemberByName(
+      trade.firstName,
+      trade.lastName,
+      committeeData.membership
+    );
+    if (bioguideId) {
+      committees = getMemberCommittees(bioguideId, committeeData.membership);
+    }
+  }
+
+  return {
+    id: traderId,
+    firstName: trade.firstName || "",
+    lastName: trade.lastName || "",
+    chamber,
+    committees,
+  };
+}
+
+// ============================================
+// Report formatting
+// ============================================
+
+export function formatTradeReport(analyzed: AnalyzedTrade): string {
+  const { trade, chamber, score } = analyzed;
 
   const lines = [
     `📊 ${trade.symbol || "N/A"} - ${trade.assetDescription || "Unknown"}`,
-    `   Trader: ${trade.firstName} ${trade.lastName} (${trade.chamber})`,
+    `   Trader: ${trade.firstName} ${trade.lastName} (${chamber})`,
     `   Type: ${trade.type || "N/A"} | Amount: ${trade.amount || "N/A"}`,
     `   Date: ${trade.transactionDate || "N/A"}`,
-    `   Score: ${score.overall}/100`,
+    `   Score: ${score.overallScore}/100`,
     `   Factors:`,
   ];
 
-  if (score.factors.isSmallCap) {
+  // Market cap
+  if (score.explanation.marketCap) {
+    const cap = score.explanation.marketCap;
     lines.push(
-      `     - Small Cap: $${((score.factors.marketCap || 0) / 1_000_000).toFixed(0)}M`
-    );
-  }
-  if (score.factors.isBelowAvgVolume) {
-    lines.push(
-      `     - Low Volume Stock: ${(score.factors.avgVolume || 0).toLocaleString()} avg daily`
-    );
-  }
-  if (score.factors.isHighConviction) {
-    lines.push(
-      `     - High Conviction: ${((score.factors.tradeAmount?.high || 0) / (score.factors.memberAvgTradeSize || 1)).toFixed(1)}x typical trade`
-    );
-  }
-  if (score.factors.relativeToAvgVolume && score.factors.relativeToAvgVolume > 0.1) {
-    lines.push(
-      `     - Trade Size: ${(score.factors.relativeToAvgVolume * 100).toFixed(1)}% of avg volume`
+      `     - Market Cap: $${(cap.value / 1_000_000).toFixed(0)}M (${cap.category})`
     );
   }
 
-  if (committeeRelevance?.potentialInsight) {
-    lines.push(`   ⚠️  Committee Relevance: ${committeeRelevance.sectors.join(", ")}`);
+  // Conviction
+  if (score.explanation.conviction && score.flags.isHighConviction) {
+    const conv = score.explanation.conviction;
+    lines.push(
+      `     - High Conviction: ${conv.multiplier.toFixed(1)}x typical trade`
+    );
+  }
+
+  // Rarity
+  if (score.explanation.rarity) {
+    const rarity = score.explanation.rarity;
+    lines.push(
+      `     - Rarity: ${rarity.category} (${rarity.totalCongressTrades} total congress trades)`
+    );
+  }
+
+  // Committee relevance
+  if (score.flags.hasCommitteeRelevance && score.explanation.committeeRelevance) {
+    const rel = score.explanation.committeeRelevance;
+    lines.push(
+      `     ⚠️ Committee Relevance: ${rel.overlappingSectors.join(", ")}`
+    );
+  }
+
+  // Derivative
+  if (score.flags.isDerivative && score.explanation.derivative) {
+    lines.push(
+      `     - Derivative: ${score.explanation.derivative.assetType}`
+    );
+  }
+
+  // Ownership
+  if (score.flags.isIndirectOwnership && score.explanation.ownership) {
+    lines.push(
+      `     - Indirect Ownership: ${score.explanation.ownership.owner}`
+    );
   }
 
   return lines.join("\n");

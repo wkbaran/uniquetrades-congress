@@ -3,8 +3,9 @@ import { fetchAllCommitteeData, loadCommitteeData } from "../services/committee-
 import { fetchTrades, loadTrades, getTradeStats } from "../services/trade-service.js";
 import { analyzeTrades, formatTradeReport } from "../services/analysis-service.js";
 import { createFMPClient } from "../services/fmp-client.js";
+import { createFMPProvider } from "../data/fmp-provider.js";
 import { getDataAge, formatDuration } from "../utils/storage.js";
-import type { AnalysisConfig } from "../types/index.js";
+import { DEFAULT_SCORING_CONFIG } from "../scoring/types.js";
 
 export const runCommand = new Command("run")
   .description("Run the full pipeline: fetch data and analyze trades")
@@ -18,24 +19,21 @@ export const runCommand = new Command("run")
   )
   .option(
     "--min-score <number>",
-    "Minimum uniqueness score",
-    "50"
-  )
-  .option(
-    "--market-cap <number>",
-    "Market cap threshold in billions",
-    "2"
+    "Minimum uniqueness score to show",
+    "40"
   )
   .option(
     "--top <number>",
     "Show top N results",
     "10"
   )
+  .option(
+    "--no-market-data",
+    "Skip fetching market data (faster)"
+  )
   .option("--json", "Output raw JSON")
   .action(async (options) => {
     try {
-      const fmpClient = createFMPClient();
-
       // Step 1: Fetch/load committee data
       console.log("📋 Step 1: Committee Data\n");
       let committeeData = await loadCommitteeData();
@@ -66,6 +64,7 @@ export const runCommand = new Command("run")
       let tradeData = await loadTrades();
 
       if (!options.skipTrades) {
+        const fmpClient = createFMPClient();
         tradeData = await fetchTrades(fmpClient);
 
         const senateStats = getTradeStats(tradeData.senateTrades);
@@ -86,19 +85,21 @@ export const runCommand = new Command("run")
       // Step 3: Analyze
       console.log("🔍 Step 3: Analysis\n");
 
-      const config: AnalysisConfig = {
-        marketCapThreshold: parseFloat(options.marketCap) * 1_000_000_000,
-        volumeThresholdMultiplier: 0.1,
-        convictionThresholdMultiplier: 2,
-        minUniquenessScore: parseInt(options.minScore, 10),
-      };
+      // Create market data provider if enabled
+      const marketDataProvider = options.marketData
+        ? createFMPProvider()
+        : null;
+
+      if (!marketDataProvider) {
+        console.log("   Market data fetching disabled\n");
+      }
 
       const report = await analyzeTrades(
         tradeData.senateTrades,
         tradeData.houseTrades,
         committeeData,
-        fmpClient,
-        config
+        marketDataProvider,
+        DEFAULT_SCORING_CONFIG
       );
 
       if (options.json) {
@@ -107,26 +108,33 @@ export const runCommand = new Command("run")
       }
 
       // Display results
+      const minScore = parseInt(options.minScore, 10);
+      const topN = parseInt(options.top, 10);
+
+      const filteredTrades = report.scoredTrades.filter(
+        (t) => t.score.overallScore >= minScore
+      );
+
       console.log("\n" + "=".repeat(60));
       console.log("🎯 UNIQUE TRADES REPORT");
       console.log("=".repeat(60));
       console.log(`Generated: ${report.generatedAt}`);
       console.log(`Total Trades Analyzed: ${report.totalTradesAnalyzed}`);
-      console.log(`Unique Trades Found: ${report.uniqueTrades.length}`);
+      console.log(`Trades Scoring >= ${minScore}: ${filteredTrades.length}`);
+      console.log(`Symbol Stats: ${report.summary.symbolStats.uniqueSymbols} unique, ${report.summary.symbolStats.rareSymbols} rare`);
 
-      const topN = parseInt(options.top, 10);
-      if (report.uniqueTrades.length > 0) {
-        console.log(`\n📈 TOP ${Math.min(topN, report.uniqueTrades.length)} UNIQUE TRADES:\n`);
+      if (filteredTrades.length > 0) {
+        console.log(`\n📈 TOP ${Math.min(topN, filteredTrades.length)} TRADES:\n`);
 
-        for (const tradeReport of report.summary.topByScore.slice(0, topN)) {
-          console.log(formatTradeReport(tradeReport));
+        for (const analyzed of filteredTrades.slice(0, topN)) {
+          console.log(formatTradeReport(analyzed));
           console.log("");
         }
       } else {
         console.log(
-          "\n   No trades met the uniqueness criteria."
+          "\n   No trades met the score threshold."
         );
-        console.log("   Try lowering --min-score or increasing --market-cap");
+        console.log("   Try lowering --min-score");
       }
 
       console.log("=".repeat(60));
