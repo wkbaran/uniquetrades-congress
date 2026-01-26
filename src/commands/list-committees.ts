@@ -1,5 +1,6 @@
 import { Command } from "commander";
-import { loadCommitteeData } from "../services/committee-service.js";
+import { loadCommitteeData, buildPartyMap, getMemberParty } from "../services/committee-service.js";
+import type { LegislatorPartyMap } from "../types/index.js";
 
 export const listCommitteesCommand = new Command("list:committees")
   .description("Display committees with sectors and members")
@@ -15,7 +16,16 @@ export const listCommitteesCommand = new Command("list:committees")
         process.exit(1);
       }
 
-      const { committees, membership, sectorMappings } = committeeData;
+      const { committees, membership, sectorMappings, legislators } = committeeData;
+
+      // Build party lookup map if legislators data is available
+      let partyMap: LegislatorPartyMap | null = null;
+      if (legislators && legislators.length > 0) {
+        partyMap = buildPartyMap(legislators);
+      } else {
+        console.warn("⚠️  Legislator data not available. Showing majority/minority instead of party names.");
+        console.warn("   Run 'fetch:committees' to refresh data.\n");
+      }
 
       // Build committee display data
       interface CommitteeDisplay {
@@ -23,7 +33,7 @@ export const listCommitteesCommand = new Command("list:committees")
         name: string;
         type: string;
         sectors: string[];
-        members: { name: string; party?: string; title?: string }[];
+        members: { name: string; party: string; title?: string; bioguide?: string }[];
       }
 
       const committeeDisplays: CommitteeDisplay[] = [];
@@ -61,12 +71,13 @@ export const listCommitteesCommand = new Command("list:committees")
           if (!hasMatch) continue;
         }
 
-        // Get members
+        // Get members with resolved party names
         const memberList = membership[code] || [];
         const members = memberList.map((m) => ({
           name: m.name,
-          party: m.party,
+          party: getMemberParty(m.bioguide, partyMap, m.party),
           title: m.title,
+          bioguide: m.bioguide,
         }));
 
         committeeDisplays.push({
@@ -141,14 +152,14 @@ export const listCommitteesCommand = new Command("list:committees")
           );
 
           if (chair) {
-            const partyTag = chair.party ? ` (${chair.party})` : "";
+            const partyTag = chair.party ? ` (${abbreviateParty(chair.party)})` : "";
             console.log(
               `  │ ${formatCell(`     ⭐ ${chair.name}${partyTag} - ${chair.title || "Chair"}`, 74)} │`
             );
           }
 
           if (rankingMember) {
-            const partyTag = rankingMember.party ? ` (${rankingMember.party})` : "";
+            const partyTag = rankingMember.party ? ` (${abbreviateParty(rankingMember.party)})` : "";
             console.log(
               `  │ ${formatCell(`     🔹 ${rankingMember.name}${partyTag} - ${rankingMember.title || "Ranking Member"}`, 74)} │`
             );
@@ -156,7 +167,7 @@ export const listCommitteesCommand = new Command("list:committees")
 
           // Show all other members
           for (const member of others) {
-            const partyTag = member.party ? ` (${member.party})` : "";
+            const partyTag = member.party ? ` (${abbreviateParty(member.party)})` : "";
             console.log(
               `  │ ${formatCell(`        ${member.name}${partyTag}`, 74)} │`
             );
@@ -200,4 +211,15 @@ function wrapText(text: string, width: number): string[] {
   }
 
   return lines;
+}
+
+function abbreviateParty(party: string): string {
+  const lower = party.toLowerCase();
+  if (lower === "republican") return "R";
+  if (lower === "democrat" || lower === "democratic") return "D";
+  if (lower === "independent") return "I";
+  if (lower === "majority") return "Maj";
+  if (lower === "minority") return "Min";
+  // Return first letter for other parties, or full string if short
+  return party.length <= 3 ? party : party.charAt(0);
 }

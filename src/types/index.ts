@@ -51,6 +51,69 @@ export type CommitteeMembershipResponse = z.infer<
 >;
 
 // ============================================
+// Legislator Types (from congress-legislators)
+// ============================================
+
+export const LegislatorIdSchema = z.object({
+  bioguide: z.string(),
+  thomas: z.string().optional(),
+  lis: z.string().optional(),
+  govtrack: z.number().optional(),
+  opensecrets: z.string().optional(),
+  votesmart: z.number().optional(),
+  fec: z.array(z.string()).optional(),
+  cspan: z.number().optional(),
+  wikipedia: z.string().optional(),
+  house_history: z.number().optional(),
+  ballotpedia: z.string().optional(),
+  maplight: z.number().optional(),
+  icpsr: z.number().optional(),
+  wikidata: z.string().optional(),
+  google_entity_id: z.string().optional(),
+});
+
+export const LegislatorNameSchema = z.object({
+  first: z.string(),
+  last: z.string(),
+  middle: z.string().optional(),
+  suffix: z.string().optional(),
+  nickname: z.string().optional(),
+  official_full: z.string().optional(),
+});
+
+export const LegislatorTermSchema = z.object({
+  type: z.enum(["sen", "rep"]),
+  start: z.string(),
+  end: z.string(),
+  state: z.string(),
+  party: z.string(),
+  class: z.number().optional(),
+  district: z.number().optional(),
+  state_rank: z.string().optional(),
+  url: z.string().optional(),
+  rss_url: z.string().optional(),
+  contact_form: z.string().optional(),
+  address: z.string().optional(),
+  office: z.string().optional(),
+  phone: z.string().optional(),
+});
+
+export const LegislatorSchema = z.object({
+  id: LegislatorIdSchema,
+  name: LegislatorNameSchema,
+  bio: z.object({
+    birthday: z.string().optional(),
+    gender: z.string().optional(),
+    religion: z.string().optional(),
+  }).optional(),
+  terms: z.array(LegislatorTermSchema),
+});
+
+export type Legislator = z.infer<typeof LegislatorSchema>;
+
+export const LegislatorsResponseSchema = z.array(LegislatorSchema);
+
+// ============================================
 // Market Sector Types
 // ============================================
 
@@ -214,7 +277,11 @@ export interface CommitteeData {
   committees: Committee[];
   membership: CommitteeMembershipResponse;
   sectorMappings: CommitteeSectorMapping[];
+  legislators?: Legislator[];
 }
+
+// Lookup map: bioguide ID -> party name
+export type LegislatorPartyMap = Map<string, string>;
 
 export interface TradeData {
   senateTrades: FMPTrade[];
