@@ -86,14 +86,27 @@ export class FMPClient {
 
   /**
    * Batch get quotes for multiple symbols
-   * FMP supports comma-separated symbols
+   * Falls back to individual requests if batch endpoint returns 402 (paid feature)
    */
   async getQuotes(symbols: string[]): Promise<Map<string, FMPQuote>> {
     const results = new Map<string, FMPQuote>();
 
     if (symbols.length === 0) return results;
 
-    // FMP allows batch quotes - process in chunks of 50
+    // Try batch request first
+    const firstBatchUrl = new URL(`/stable/quote`, FMP_BASE_URL);
+    firstBatchUrl.searchParams.set("symbol", symbols.slice(0, 5).join(","));
+    firstBatchUrl.searchParams.set("apikey", this.apiKey);
+
+    const testResponse = await fetch(firstBatchUrl.toString());
+
+    // If batch returns 402, fall back to individual requests
+    if (testResponse.status === 402) {
+      console.log(`Batch quotes require paid tier, fetching ${symbols.length} quotes individually...`);
+      return this.getQuotesIndividually(symbols);
+    }
+
+    // Batch is available, process in chunks
     const chunkSize = 50;
     for (let i = 0; i < symbols.length; i += chunkSize) {
       const chunk = symbols.slice(i, i + chunkSize);
@@ -133,6 +146,33 @@ export class FMPClient {
       }
     }
 
+    return results;
+  }
+
+  /**
+   * Fetch quotes individually (fallback for free tier)
+   */
+  private async getQuotesIndividually(symbols: string[]): Promise<Map<string, FMPQuote>> {
+    const results = new Map<string, FMPQuote>();
+    let fetched = 0;
+
+    for (const symbol of symbols) {
+      const quote = await this.getQuote(symbol);
+      if (quote) {
+        results.set(symbol, quote);
+      }
+      fetched++;
+
+      // Progress indicator every 10 symbols
+      if (fetched % 10 === 0) {
+        console.log(`  Fetched ${fetched}/${symbols.length} quotes...`);
+      }
+
+      // Small delay to avoid rate limiting (free tier is usually 5 req/sec)
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    console.log(`  Fetched ${results.size}/${symbols.length} quotes successfully`);
     return results;
   }
 }
