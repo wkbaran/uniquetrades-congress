@@ -58,8 +58,8 @@ export class FMPClient {
    */
   async getQuote(symbol: string): Promise<FMPQuote | null> {
     try {
-      const url = new URL(`/stable/quote`, FMP_BASE_URL);
-      url.searchParams.set("symbol", symbol);
+      // FMP quote endpoint: /api/v3/quote/{symbol}
+      const url = new URL(`/api/v3/quote/${encodeURIComponent(symbol)}`, FMP_BASE_URL);
       url.searchParams.set("apikey", this.apiKey);
 
       const response = await fetch(url.toString());
@@ -93,9 +93,10 @@ export class FMPClient {
 
     if (symbols.length === 0) return results;
 
-    // Try batch request first
-    const firstBatchUrl = new URL(`/stable/quote`, FMP_BASE_URL);
-    firstBatchUrl.searchParams.set("symbol", symbols.slice(0, 5).join(","));
+    // Try batch request first with a few symbols
+    // FMP batch format: /api/v3/quote/AAPL,MSFT,GOOGL
+    const testSymbols = symbols.slice(0, 5).join(",");
+    const firstBatchUrl = new URL(`/api/v3/quote/${testSymbols}`, FMP_BASE_URL);
     firstBatchUrl.searchParams.set("apikey", this.apiKey);
 
     const testResponse = await fetch(firstBatchUrl.toString());
@@ -113,8 +114,7 @@ export class FMPClient {
       const symbolsParam = chunk.join(",");
 
       try {
-        const url = new URL(`/stable/quote`, FMP_BASE_URL);
-        url.searchParams.set("symbol", symbolsParam);
+        const url = new URL(`/api/v3/quote/${symbolsParam}`, FMP_BASE_URL);
         url.searchParams.set("apikey", this.apiKey);
 
         const response = await fetch(url.toString());
