@@ -281,11 +281,12 @@ export async function analyzeTrades(
     `Analyzing ${senateTrades.length} Senate trades and ${houseTrades.length} House trades...`
   );
 
-  // Enrich trades with market data
-  const [enrichedSenate, enrichedHouse] = await Promise.all([
-    enrichTrades(senateTrades, "senate", fmpClient),
-    enrichTrades(houseTrades, "house", fmpClient),
-  ]);
+  // Enrich trades with market data - run sequentially to avoid rate limiting
+  console.log("Enriching Senate trades...");
+  const enrichedSenate = await enrichTrades(senateTrades, "senate", fmpClient);
+
+  console.log("Enriching House trades...");
+  const enrichedHouse = await enrichTrades(houseTrades, "house", fmpClient);
 
   const allTrades = [...enrichedSenate, ...enrichedHouse];
 
