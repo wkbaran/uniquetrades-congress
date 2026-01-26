@@ -171,13 +171,14 @@ export class FMPMarketDataProvider implements MarketDataProvider {
 
   /**
    * Fetch from FMP API with retry logic
+   * Uses /stable/profile endpoint for sector, industry, and averageVolume
    */
   private async fetchFromAPI(
     symbol: string,
     retryCount = 0
   ): Promise<MarketData | null> {
     try {
-      const url = new URL("/stable/quote", FMP_BASE_URL);
+      const url = new URL("/stable/profile", FMP_BASE_URL);
       url.searchParams.set("symbol", symbol);
       url.searchParams.set("apikey", this.apiKey);
 
@@ -211,10 +212,13 @@ export class FMPMarketDataProvider implements MarketDataProvider {
         return null;
       }
 
-      const quote = Array.isArray(data) ? data[0] : data;
+      const profile = Array.isArray(data) ? data[0] : data;
 
       return {
-        marketCap: quote.marketCap ?? null,
+        marketCap: profile.mktCap ?? profile.marketCap ?? null,
+        sector: profile.sector ?? null,
+        industry: profile.industry ?? null,
+        averageVolume: profile.volAvg ?? profile.averageVolume ?? null,
       };
     } catch (error) {
       console.warn(`  Error fetching ${symbol}:`, error);
@@ -243,4 +247,96 @@ export function createFMPProvider(): FMPMarketDataProvider {
     throw new Error("FMP_API_KEY environment variable is not set");
   }
   return new FMPMarketDataProvider(apiKey);
+}
+
+// ============================================
+// Sector/Industry Taxonomy
+// ============================================
+
+const SECTORS_CACHE_FILE = "fmp-sectors.json";
+const INDUSTRIES_CACHE_FILE = "fmp-industries.json";
+const TAXONOMY_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+export interface FMPSector {
+  sector: string;
+}
+
+export interface FMPIndustry {
+  industry: string;
+}
+
+/**
+ * Fetch available sectors from FMP
+ */
+export async function fetchAvailableSectors(apiKey: string): Promise<string[]> {
+  // Check cache first
+  const cached = await loadData<string[]>(SECTORS_CACHE_FILE);
+  if (cached?.data) {
+    const fetchedAt = new Date(cached.fetchedAt).getTime();
+    if (Date.now() - fetchedAt < TAXONOMY_TTL_MS) {
+      console.log(`  Using cached sectors (${cached.data.length} sectors)`);
+      return cached.data;
+    }
+  }
+
+  // Fetch from API
+  try {
+    const url = new URL("/stable/available-sectors", FMP_BASE_URL);
+    url.searchParams.set("apikey", apiKey);
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      console.warn(`  Failed to fetch sectors: ${response.status}`);
+      return cached?.data ?? [];
+    }
+
+    const data = (await response.json()) as FMPSector[];
+    const sectors = data.map((s) => s.sector).filter(Boolean);
+
+    await saveData(SECTORS_CACHE_FILE, sectors);
+    console.log(`  Fetched and cached ${sectors.length} sectors`);
+
+    return sectors;
+  } catch (error) {
+    console.warn("  Error fetching sectors:", error);
+    return cached?.data ?? [];
+  }
+}
+
+/**
+ * Fetch available industries from FMP
+ */
+export async function fetchAvailableIndustries(apiKey: string): Promise<string[]> {
+  // Check cache first
+  const cached = await loadData<string[]>(INDUSTRIES_CACHE_FILE);
+  if (cached?.data) {
+    const fetchedAt = new Date(cached.fetchedAt).getTime();
+    if (Date.now() - fetchedAt < TAXONOMY_TTL_MS) {
+      console.log(`  Using cached industries (${cached.data.length} industries)`);
+      return cached.data;
+    }
+  }
+
+  // Fetch from API
+  try {
+    const url = new URL("/stable/available-industries", FMP_BASE_URL);
+    url.searchParams.set("apikey", apiKey);
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      console.warn(`  Failed to fetch industries: ${response.status}`);
+      return cached?.data ?? [];
+    }
+
+    const data = (await response.json()) as FMPIndustry[];
+    const industries = data.map((i) => i.industry).filter(Boolean);
+
+    await saveData(INDUSTRIES_CACHE_FILE, industries);
+    console.log(`  Fetched and cached ${industries.length} industries`);
+
+    return industries;
+  } catch (error) {
+    console.warn("  Error fetching industries:", error);
+    return cached?.data ?? [];
+  }
 }

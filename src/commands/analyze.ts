@@ -120,7 +120,9 @@ export const analyzeCommand = new Command("analyze")
             `   ${analyzed.trade.symbol}: ${analyzed.trade.firstName} ${analyzed.trade.lastName}`
           );
           if (rel) {
-            console.log(`      Sectors: ${rel.overlappingSectors.join(", ")}`);
+            const sectorInfo = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
+            console.log(`      Sector: ${sectorInfo || "N/A"}`);
+            console.log(`      Committees: ${rel.overlappingCommittees.join(", ")}`);
           }
         }
       }

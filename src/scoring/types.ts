@@ -5,8 +5,6 @@
  * The scoring module is pure - it takes data and returns scores without any I/O.
  */
 
-import type { MarketSector } from "../types/index.js";
-
 // ============================================
 // Input Types - What the scorer needs
 // ============================================
@@ -49,6 +47,9 @@ visibleTrades: TradeInput[];
  */
 export interface MarketData {
   marketCap: number | null;
+  sector: string | null;
+  industry: string | null;
+  averageVolume: number | null;
 }
 
 /**
@@ -63,10 +64,15 @@ export interface CongressionalTradingPattern {
 
 /**
  * Committee sector mapping for relevance checking
+ * Uses FMP sector/industry taxonomy
  */
 export interface CommitteeSectorMap {
-  getCommitteeSectors(committeeId: string): MarketSector[];
-  getStockSectors(symbol: string, description: string): MarketSector[];
+  /** Get FMP sectors a committee has jurisdiction over */
+  getCommitteeSectors(committeeId: string): string[];
+  /** Get FMP industries a committee has jurisdiction over */
+  getCommitteeIndustries(committeeId: string): string[];
+  /** Check if a committee has jurisdiction over a stock's sector/industry */
+  hasOverlap(committeeId: string, sector: string | null, industry: string | null): boolean;
 }
 
 // ============================================
@@ -116,8 +122,9 @@ export interface ScoreExplanation {
   };
   committeeRelevance?: {
     traderCommittees: string[];
-    stockSectors: MarketSector[];
-    overlappingSectors: MarketSector[];
+    stockSector: string | null;
+    stockIndustry: string | null;
+    overlappingCommittees: string[];
   };
   derivative?: {
     assetType: string;
