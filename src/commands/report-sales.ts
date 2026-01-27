@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import * as fs from "fs/promises";
+import * as path from "path";
 import { loadTrades } from "../services/trade-service.js";
 import {
   loadCommitteeData,
@@ -60,15 +62,16 @@ export const reportSalesCommand = new Command("report:sales")
         return "";
       };
 
-      // Print header
-      console.log("");
-      console.log("═".repeat(90));
-      console.log("  CONGRESSIONAL SALES REPORT");
-      console.log("═".repeat(90));
-      console.log(`  Generated: ${new Date().toISOString().split("T")[0]}`);
-      console.log(`  Total Sales: ${sales.length}`);
-      console.log("═".repeat(90));
-      console.log("");
+      // Build formatted output
+      const lines: string[] = [];
+      lines.push("");
+      lines.push("═".repeat(90));
+      lines.push("  CONGRESSIONAL SALES REPORT");
+      lines.push("═".repeat(90));
+      lines.push(`  Generated: ${new Date().toISOString().split("T")[0]}`);
+      lines.push(`  Total Sales: ${sales.length}`);
+      lines.push("═".repeat(90));
+      lines.push("");
 
       // Group by date for readability
       let currentDate = "";
@@ -78,8 +81,8 @@ export const reportSalesCommand = new Command("report:sales")
 
         // Print date header when date changes
         if (date !== currentDate) {
-          if (currentDate !== "") console.log("");
-          console.log(`── ${date} ${"─".repeat(75)}`);
+          if (currentDate !== "") lines.push("");
+          lines.push(`── ${date} ${"─".repeat(75)}`);
           currentDate = date;
         }
 
@@ -96,20 +99,32 @@ export const reportSalesCommand = new Command("report:sales")
         const typeLabel = assetType && assetType !== "Stock" ? ` (${assetType})` : "";
 
         // Main line: Symbol, Amount, Member
-        console.log(
+        lines.push(
           `  ${symbol.padEnd(6)} ${amount.padEnd(22)} ${chamberLabel}. ${name}${partyLabel}${ownerLabel}`
         );
 
         // Description line (indented)
         const description = trade.assetDescription || "";
         if (description && description !== symbol) {
-          console.log(`         ${description}${typeLabel}`);
+          lines.push(`         ${description}${typeLabel}`);
         }
       }
 
-      console.log("");
-      console.log("═".repeat(90));
-      console.log("");
+      lines.push("");
+      lines.push("═".repeat(90));
+      lines.push("");
+
+      // Output to console
+      const output = lines.join("\n");
+      console.log(output);
+
+      // Save to formatted-reports directory
+      const reportsDir = path.join(process.cwd(), "formatted-reports");
+      await fs.mkdir(reportsDir, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const filename = `sales-${timestamp}.txt`;
+      await fs.writeFile(path.join(reportsDir, filename), output);
+      console.log(`📁 Saved to formatted-reports/${filename}`);
     } catch (error) {
       console.error("❌ Failed to generate sales report:", error);
       process.exit(1);
