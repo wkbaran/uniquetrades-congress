@@ -4,6 +4,7 @@ import { config } from "dotenv";
 import { Command } from "commander";
 import { fetchCommitteesCommand } from "./commands/fetch-committees.js";
 import { fetchTradesCommand } from "./commands/fetch-trades.js";
+import { fetchTaxonomyCommand } from "./commands/fetch-taxonomy.js";
 import { analyzeCommand } from "./commands/analyze.js";
 import { statusCommand } from "./commands/status.js";
 import { runCommand } from "./commands/run.js";
@@ -23,6 +24,7 @@ program
 // Register commands
 program.addCommand(fetchCommitteesCommand);
 program.addCommand(fetchTradesCommand);
+program.addCommand(fetchTaxonomyCommand);
 program.addCommand(analyzeCommand);
 program.addCommand(statusCommand);
 program.addCommand(runCommand);
