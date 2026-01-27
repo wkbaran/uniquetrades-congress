@@ -240,6 +240,34 @@ export function getMemberCommittees(
 }
 
 /**
+ * Check if a first name matches, handling initials
+ * e.g., "J." matches "James", "James" matches "James"
+ */
+function firstNameMatches(searchName: string, memberName: string): boolean {
+  const search = searchName.toLowerCase().trim();
+  const member = memberName.toLowerCase().trim();
+
+  // Exact match
+  if (member.includes(search)) return true;
+
+  // Check if member name starts with search initial
+  // e.g., search="james", member="j." or "j. french"
+  const searchInitial = search.charAt(0);
+  const memberParts = member.split(/[\s.]+/);
+  for (const part of memberParts) {
+    if (part.length === 1 && part === searchInitial) return true;
+  }
+
+  // Check if search name is an initial that matches member
+  // e.g., search="j", member="james"
+  if (search.length <= 2 && member.startsWith(search.replace(".", ""))) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Find congress member by name in membership data
  * Returns bioguide ID if found
  */
@@ -256,11 +284,12 @@ export function findMemberByName(
   for (const members of Object.values(membership)) {
     for (const member of members) {
       const memberName = member.name.toLowerCase();
-      // Name format is typically "LastName, FirstName" or "FirstName LastName"
-      if (
-        memberName.includes(normalizedFirst) &&
-        memberName.includes(normalizedLast)
-      ) {
+
+      // Must have last name
+      if (!memberName.includes(normalizedLast)) continue;
+
+      // Check first name with initial handling
+      if (firstNameMatches(normalizedFirst, memberName)) {
         return member.bioguide || null;
       }
     }
@@ -274,16 +303,19 @@ export function findMemberByName(
       const legLast = (legislator.name.last || "").toLowerCase();
       const legOfficial = (legislator.name.official_full || "").toLowerCase();
 
-      // Try exact match on first/last name
-      if (legFirst === normalizedFirst && legLast === normalizedLast) {
+      // Must have last name match
+      if (legLast !== normalizedLast && !legOfficial.includes(normalizedLast)) {
+        continue;
+      }
+
+      // Try exact match on first name
+      if (legFirst === normalizedFirst) {
         return legislator.id.bioguide;
       }
 
-      // Try partial match (handles middle names, suffixes, etc.)
-      if (
-        legOfficial.includes(normalizedFirst) &&
-        legOfficial.includes(normalizedLast)
-      ) {
+      // Try initial match
+      if (firstNameMatches(normalizedFirst, legFirst) ||
+          firstNameMatches(normalizedFirst, legOfficial)) {
         return legislator.id.bioguide;
       }
     }
