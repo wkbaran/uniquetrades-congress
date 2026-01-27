@@ -31,6 +31,7 @@ export interface TraderInput {
   lastName: string;
   chamber: "senate" | "house";
   committees: string[]; // Committee IDs
+  party?: string; // "Republican", "Democrat", etc.
 }
 
 /**

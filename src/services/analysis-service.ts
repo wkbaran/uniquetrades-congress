@@ -5,7 +5,7 @@
  * scoring and data provider components.
  */
 
-import type { FMPTrade, CommitteeData } from "../types/index.js";
+import type { FMPTrade, CommitteeData, LegislatorPartyMap } from "../types/index.js";
 import type {
   TradeInput,
   TraderInput,
@@ -21,6 +21,8 @@ import { createSectorMap } from "../data/sector-map.js";
 import {
   findMemberByName,
   getMemberCommittees,
+  getMemberParty,
+  buildPartyMap,
 } from "./committee-service.js";
 import { saveReport } from "../utils/storage.js";
 
@@ -135,6 +137,11 @@ export async function analyzeTrades(
   // Build sector map (uses FMP sector/industry taxonomy)
   const sectorMap = createSectorMap();
 
+  // Build party map from legislators data
+  const partyMap: LegislatorPartyMap | null = committeeData?.legislators
+    ? buildPartyMap(committeeData.legislators)
+    : null;
+
   // Build trader histories
   const traderHistories = buildTraderHistories(allTrades);
   console.log(`  Built histories for ${traderHistories.size} traders`);
@@ -168,7 +175,7 @@ export async function analyzeTrades(
     if (!traderHistory) continue;
 
     // Build trader info
-    const trader = buildTraderInput(trade, chamber, committeeData);
+    const trader = buildTraderInput(trade, chamber, committeeData, partyMap);
 
     // Get market data
     const marketData = trade.symbol
@@ -199,8 +206,12 @@ export async function analyzeTrades(
     });
   }
 
-  // Sort by overall score
-  scoredTrades.sort((a, b) => b.score.overallScore - a.score.overallScore);
+  // Sort by date descending (most recent first)
+  scoredTrades.sort((a, b) => {
+    const dateA = a.trade.transactionDate || "";
+    const dateB = b.trade.transactionDate || "";
+    return dateB.localeCompare(dateA);
+  });
 
   // Build summary
   const topByScore = scoredTrades.slice(0, 20);
@@ -284,12 +295,14 @@ function buildTraderHistories(
 function buildTraderInput(
   trade: FMPTrade,
   chamber: "senate" | "house",
-  committeeData: CommitteeData | null
+  committeeData: CommitteeData | null,
+  partyMap: LegislatorPartyMap | null
 ): TraderInput {
   const traderId = getTraderId(trade, chamber);
 
-  // Find committees
+  // Find committees and party
   let committees: string[] = [];
+  let party: string | undefined;
   if (committeeData && trade.firstName && trade.lastName) {
     const bioguideId = findMemberByName(
       trade.firstName,
@@ -298,6 +311,7 @@ function buildTraderInput(
     );
     if (bioguideId) {
       committees = getMemberCommittees(bioguideId, committeeData.membership);
+      party = getMemberParty(bioguideId, partyMap);
     }
   }
 
@@ -307,6 +321,7 @@ function buildTraderInput(
     lastName: trade.lastName || "",
     chamber,
     committees,
+    party,
   };
 }
 
@@ -315,11 +330,16 @@ function buildTraderInput(
 // ============================================
 
 export function formatTradeReport(analyzed: AnalyzedTrade): string {
-  const { trade, chamber, score } = analyzed;
+  const { trade, chamber, trader, score } = analyzed;
+
+  // Format party as (R), (D), or empty
+  const partyLabel = trader.party
+    ? ` (${trader.party === "Republican" ? "R" : trader.party === "Democrat" ? "D" : trader.party.charAt(0)})`
+    : "";
 
   const lines = [
     `📊 ${trade.symbol || "N/A"} - ${trade.assetDescription || "Unknown"}`,
-    `   Trader: ${trade.firstName} ${trade.lastName} (${chamber})`,
+    `   Trader: ${trade.firstName} ${trade.lastName}${partyLabel} (${chamber})`,
     `   Type: ${trade.type || "N/A"} | Amount: ${trade.amount || "N/A"}`,
     `   Date: ${trade.transactionDate || "N/A"}`,
     `   Score: ${score.overallScore}/100`,
