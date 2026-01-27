@@ -10,6 +10,7 @@ import { statusCommand } from "./commands/status.js";
 import { runCommand } from "./commands/run.js";
 import { listCommitteesCommand } from "./commands/list-committees.js";
 import { listTradesCommand } from "./commands/list-trades.js";
+import { reportSalesCommand } from "./commands/report-sales.js";
 
 // Load environment variables
 config();
@@ -30,6 +31,7 @@ program.addCommand(statusCommand);
 program.addCommand(runCommand);
 program.addCommand(listCommitteesCommand);
 program.addCommand(listTradesCommand);
+program.addCommand(reportSalesCommand);
 
 // Parse arguments
 program.parse();
