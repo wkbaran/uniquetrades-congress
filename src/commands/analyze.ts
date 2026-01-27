@@ -15,8 +15,8 @@ export const analyzeCommand = new Command("analyze")
   )
   .option(
     "--top <number>",
-    "Show top N results",
-    "10"
+    "Limit to top N results (0 = all)",
+    "0"
   )
   .option(
     "--no-market-data",
@@ -93,9 +93,11 @@ export const analyzeCommand = new Command("analyze")
       console.log(`Symbol Stats: ${report.summary.symbolStats.uniqueSymbols} unique, ${report.summary.symbolStats.rareSymbols} rare`);
       console.log("");
 
-      console.log(`\n📈 TOP ${Math.min(topN, filteredTrades.length)} TRADES (score >= ${minScore}):\n`);
+      const tradesToShow = topN > 0 ? filteredTrades.slice(0, topN) : filteredTrades;
+      const countLabel = topN > 0 ? `TOP ${tradesToShow.length}` : `ALL ${tradesToShow.length}`;
+      console.log(`\n📈 ${countLabel} TRADES (score >= ${minScore}):\n`);
 
-      for (const analyzed of filteredTrades.slice(0, topN)) {
+      for (const analyzed of tradesToShow) {
         console.log(formatTradeReport(analyzed));
         console.log("");
       }
