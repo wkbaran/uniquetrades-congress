@@ -5,10 +5,12 @@
  * This allows detecting when a congress member trades in sectors
  * their committees have oversight of.
  *
- * FMP Sectors (as of 2024):
- * - Technology, Healthcare, Financial Services, Energy, Industrials,
- * - Consumer Cyclical, Consumer Defensive, Basic Materials,
- * - Real Estate, Utilities, Communication Services
+ * FMP Sectors (validated 2026-01-27):
+ * - Basic Materials, Communication Services, Consumer Cyclical,
+ * - Consumer Defensive, Energy, Financial Services, Healthcare,
+ * - Industrials, Real Estate, Technology, Utilities
+ *
+ * Industry names updated to match FMP's exact naming convention.
  */
 
 // ============================================
@@ -34,12 +36,12 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Agriculture, Nutrition, and Forestry",
     sectors: ["Consumer Defensive", "Basic Materials"],
     industries: [
-      "Farm Products",
+      "Agricultural Farm Products",
       "Agricultural Inputs",
       "Packaged Foods",
       "Food Distribution",
-      "Beverages—Non-Alcoholic",
-      "Confectioners",
+      "Beverages - Non-Alcoholic",
+      "Food Confectioners",
     ],
   },
   {
@@ -62,20 +64,21 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Banking, Housing, and Urban Affairs",
     sectors: ["Financial Services", "Real Estate"],
     industries: [
-      "Banks—Regional",
-      "Banks—Diversified",
-      "Credit Services",
+      "Banks - Regional",
+      "Banks - Diversified",
+      "Banks",
+      "Financial - Credit Services",
       "Asset Management",
-      "Capital Markets",
-      "Insurance—Diversified",
-      "Insurance—Property & Casualty",
-      "Insurance—Life",
-      "Financial Data & Stock Exchanges",
-      "Mortgage Finance",
-      "Real Estate—Development",
-      "Real Estate Services",
-      "REIT—Diversified",
-      "REIT—Residential",
+      "Financial - Capital Markets",
+      "Insurance - Diversified",
+      "Insurance - Property & Casualty",
+      "Insurance - Life",
+      "Financial - Data & Stock Exchanges",
+      "Financial - Mortgages",
+      "Real Estate - Development",
+      "Real Estate - Services",
+      "REIT - Diversified",
+      "REIT - Residential",
     ],
   },
   {
@@ -90,15 +93,15 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     sectors: ["Technology", "Communication Services", "Industrials"],
     industries: [
       "Internet Content & Information",
-      "Software—Infrastructure",
-      "Software—Application",
+      "Software - Infrastructure",
+      "Software - Application",
       "Semiconductors",
       "Consumer Electronics",
       "Communication Equipment",
-      "Telecom Services",
+      "Telecommunications Services",
       "Broadcasting",
       "Entertainment",
-      "Airlines",
+      "Airlines, Airports & Air Services",
       "Railroads",
       "Trucking",
       "Marine Shipping",
@@ -115,11 +118,11 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
       "Oil & Gas Refining & Marketing",
       "Oil & Gas Equipment & Services",
       "Uranium",
-      "Utilities—Regulated Electric",
-      "Utilities—Renewable",
-      "Utilities—Independent Power Producers",
+      "Regulated Electric",
+      "Renewable Utilities",
+      "Independent Power Producers",
       "Solar",
-      "Thermal Coal",
+      "Coal",
     ],
   },
   {
@@ -129,8 +132,9 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     industries: [
       "Waste Management",
       "Engineering & Construction",
-      "Building Products & Equipment",
-      "Specialty Chemicals",
+      "Construction Materials",
+      "Chemicals - Specialty",
+      "Environmental Services",
     ],
   },
   {
@@ -138,11 +142,10 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Finance",
     sectors: ["Healthcare", "Financial Services"],
     industries: [
-      "Health Care Plans",
-      "Pharmaceutical Retailers",
-      "Medical Care Facilities",
-      "Insurance—Diversified",
-      "Tax Services",
+      "Medical - Healthcare Plans",
+      "Medical - Pharmaceuticals",
+      "Medical - Care Facilities",
+      "Insurance - Diversified",
     ],
   },
   {
@@ -158,14 +161,14 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Health, Education, Labor, and Pensions",
     sectors: ["Healthcare"],
     industries: [
-      "Drug Manufacturers—General",
-      "Drug Manufacturers—Specialty & Generic",
+      "Drug Manufacturers - General",
+      "Drug Manufacturers - Specialty & Generic",
       "Biotechnology",
-      "Medical Devices",
-      "Medical Instruments & Supplies",
-      "Diagnostics & Research",
-      "Health Care Plans",
-      "Medical Care Facilities",
+      "Medical - Devices",
+      "Medical - Instruments & Supplies",
+      "Medical - Diagnostics & Research",
+      "Medical - Healthcare Plans",
+      "Medical - Care Facilities",
       "Education & Training Services",
     ],
   },
@@ -175,7 +178,7 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     sectors: ["Technology", "Industrials"],
     industries: [
       "Information Technology Services",
-      "Software—Infrastructure",
+      "Software - Infrastructure",
       "Security & Protection Services",
       "Aerospace & Defense",
     ],
@@ -186,7 +189,7 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     sectors: ["Technology", "Communication Services"],
     industries: [
       "Internet Content & Information",
-      "Software—Application",
+      "Software - Application",
     ],
   },
   {
@@ -206,9 +209,9 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Veterans' Affairs",
     sectors: ["Healthcare"],
     industries: [
-      "Health Care Plans",
-      "Medical Care Facilities",
-      "Drug Manufacturers—Specialty & Generic",
+      "Medical - Healthcare Plans",
+      "Medical - Care Facilities",
+      "Drug Manufacturers - Specialty & Generic",
     ],
   },
 ];
@@ -223,7 +226,7 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Agriculture",
     sectors: ["Consumer Defensive", "Basic Materials"],
     industries: [
-      "Farm Products",
+      "Agricultural Farm Products",
       "Agricultural Inputs",
       "Packaged Foods",
       "Food Distribution",
@@ -249,17 +252,18 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Financial Services",
     sectors: ["Financial Services", "Real Estate"],
     industries: [
-      "Banks—Regional",
-      "Banks—Diversified",
-      "Credit Services",
+      "Banks - Regional",
+      "Banks - Diversified",
+      "Banks",
+      "Financial - Credit Services",
       "Asset Management",
-      "Capital Markets",
-      "Insurance—Diversified",
-      "Insurance—Property & Casualty",
-      "Insurance—Life",
-      "Financial Data & Stock Exchanges",
-      "Mortgage Finance",
-      "REIT—Diversified",
+      "Financial - Capital Markets",
+      "Insurance - Diversified",
+      "Insurance - Property & Casualty",
+      "Insurance - Life",
+      "Financial - Data & Stock Exchanges",
+      "Financial - Mortgages",
+      "REIT - Diversified",
     ],
   },
   {
@@ -275,7 +279,7 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     industries: [
       "Education & Training Services",
       "Staffing & Employment Services",
-      "Health Care Plans",
+      "Medical - Healthcare Plans",
     ],
   },
   {
@@ -285,11 +289,11 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     industries: [
       "Oil & Gas Exploration & Production",
       "Oil & Gas Integrated",
-      "Utilities—Regulated Electric",
-      "Drug Manufacturers—General",
+      "Regulated Electric",
+      "Drug Manufacturers - General",
       "Biotechnology",
-      "Medical Devices",
-      "Telecom Services",
+      "Medical - Devices",
+      "Telecommunications Services",
       "Internet Content & Information",
       "Broadcasting",
     ],
@@ -324,7 +328,7 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     sectors: ["Energy", "Basic Materials"],
     industries: [
       "Oil & Gas Exploration & Production",
-      "Other Precious Metals & Mining",
+      "Other Precious Metals",
       "Gold",
       "Silver",
       "Copper",
@@ -337,7 +341,7 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     sectors: ["Technology", "Communication Services"],
     industries: [
       "Internet Content & Information",
-      "Software—Application",
+      "Software - Application",
     ],
   },
   {
@@ -351,12 +355,12 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Transportation and Infrastructure",
     sectors: ["Industrials"],
     industries: [
-      "Airlines",
+      "Airlines, Airports & Air Services",
       "Railroads",
       "Trucking",
       "Marine Shipping",
       "Engineering & Construction",
-      "Building Products & Equipment",
+      "Construction Materials",
     ],
   },
   {
@@ -378,8 +382,7 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     industries: [
       "Aerospace & Defense",
       "Semiconductors",
-      "Scientific & Technical Instruments",
-      "Software—Infrastructure",
+      "Software - Infrastructure",
     ],
   },
   {
@@ -387,8 +390,8 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Veterans' Affairs",
     sectors: ["Healthcare"],
     industries: [
-      "Health Care Plans",
-      "Medical Care Facilities",
+      "Medical - Healthcare Plans",
+      "Medical - Care Facilities",
     ],
   },
   {
@@ -396,9 +399,8 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     committeeName: "Ways and Means",
     sectors: ["Healthcare", "Financial Services"],
     industries: [
-      "Health Care Plans",
-      "Insurance—Diversified",
-      "Tax Services",
+      "Medical - Healthcare Plans",
+      "Insurance - Diversified",
     ],
   },
 ];
