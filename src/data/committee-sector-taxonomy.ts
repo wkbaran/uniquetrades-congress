@@ -57,6 +57,8 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     industries: [
       "Aerospace & Defense",
       "Security & Protection Services",
+      "Conglomerates",
+      "Manufacturing - Tools & Accessories",
     ],
   },
   {
@@ -105,6 +107,8 @@ export const SENATE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
       "Railroads",
       "Trucking",
       "Marine Shipping",
+      "Conglomerates",
+      "Manufacturing - Tools & Accessories",
     ],
   },
   {
@@ -245,6 +249,8 @@ export const HOUSE_COMMITTEE_TAXONOMY: CommitteeSectorTaxonomy[] = [
     industries: [
       "Aerospace & Defense",
       "Security & Protection Services",
+      "Conglomerates",
+      "Manufacturing - Tools & Accessories",
     ],
   },
   {
