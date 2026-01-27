@@ -246,11 +246,13 @@ export function getMemberCommittees(
 export function findMemberByName(
   firstName: string,
   lastName: string,
-  membership: CommitteeMembershipResponse
+  membership: CommitteeMembershipResponse,
+  legislators?: Legislator[]
 ): string | null {
   const normalizedFirst = firstName.toLowerCase().trim();
   const normalizedLast = lastName.toLowerCase().trim();
 
+  // First, search committee membership
   for (const members of Object.values(membership)) {
     for (const member of members) {
       const memberName = member.name.toLowerCase();
@@ -260,6 +262,29 @@ export function findMemberByName(
         memberName.includes(normalizedLast)
       ) {
         return member.bioguide || null;
+      }
+    }
+  }
+
+  // If not found in membership, search legislators directly
+  // (handles members not on any committees)
+  if (legislators) {
+    for (const legislator of legislators) {
+      const legFirst = (legislator.name.first || "").toLowerCase();
+      const legLast = (legislator.name.last || "").toLowerCase();
+      const legOfficial = (legislator.name.official_full || "").toLowerCase();
+
+      // Try exact match on first/last name
+      if (legFirst === normalizedFirst && legLast === normalizedLast) {
+        return legislator.id.bioguide;
+      }
+
+      // Try partial match (handles middle names, suffixes, etc.)
+      if (
+        legOfficial.includes(normalizedFirst) &&
+        legOfficial.includes(normalizedLast)
+      ) {
+        return legislator.id.bioguide;
       }
     }
   }
