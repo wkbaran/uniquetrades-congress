@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import * as fs from "fs/promises";
+import * as path from "path";
 import { loadTrades } from "../services/trade-service.js";
 import { loadCommitteeData } from "../services/committee-service.js";
 import { analyzeTrades, formatTradeReport } from "../services/analysis-service.js";
@@ -84,30 +86,33 @@ export const analyzeCommand = new Command("analyze")
         (t) => t.score.overallScore >= minScore
       );
 
-      console.log("\n" + "=".repeat(60));
-      console.log("UNIQUE TRADES ANALYSIS REPORT");
-      console.log("=".repeat(60));
-      console.log(`Generated: ${report.generatedAt}`);
-      console.log(`Total Trades Analyzed: ${report.totalTradesAnalyzed}`);
-      console.log(`Trades Scoring >= ${minScore}: ${filteredTrades.length}`);
-      console.log(`Symbol Stats: ${report.summary.symbolStats.uniqueSymbols} unique, ${report.summary.symbolStats.rareSymbols} rare`);
-      console.log("");
+      // Build formatted output
+      const lines: string[] = [];
+      lines.push("");
+      lines.push("=".repeat(60));
+      lines.push("UNIQUE TRADES ANALYSIS REPORT");
+      lines.push("=".repeat(60));
+      lines.push(`Generated: ${report.generatedAt}`);
+      lines.push(`Total Trades Analyzed: ${report.totalTradesAnalyzed}`);
+      lines.push(`Trades Scoring >= ${minScore}: ${filteredTrades.length}`);
+      lines.push(`Symbol Stats: ${report.summary.symbolStats.uniqueSymbols} unique, ${report.summary.symbolStats.rareSymbols} rare`);
+      lines.push("");
 
       const tradesToShow = topN > 0 ? filteredTrades.slice(0, topN) : filteredTrades;
       const countLabel = topN > 0 ? `TOP ${tradesToShow.length}` : `ALL ${tradesToShow.length}`;
-      console.log(`\n📈 ${countLabel} TRADES (score >= ${minScore}):\n`);
+      lines.push(`\n📈 ${countLabel} TRADES (score >= ${minScore}):\n`);
 
       for (const analyzed of tradesToShow) {
-        console.log(formatTradeReport(analyzed));
-        console.log("");
+        lines.push(formatTradeReport(analyzed));
+        lines.push("");
       }
 
       // Rare stocks section
       if (report.summary.byRarity.length > 0) {
-        console.log("\n🔍 RARE STOCK TRADES (few congress trades):\n");
+        lines.push("\n🔍 RARE STOCK TRADES (few congress trades):\n");
         for (const analyzed of report.summary.byRarity.slice(0, 5)) {
           const rarity = analyzed.score.explanation.rarity;
-          console.log(
+          lines.push(
             `   ${analyzed.trade.symbol}: ${analyzed.trade.firstName} ${analyzed.trade.lastName} - ${rarity?.category} (${rarity?.totalCongressTrades} total trades)`
           );
         }
@@ -115,21 +120,33 @@ export const analyzeCommand = new Command("analyze")
 
       // Committee relevance section
       if (report.summary.byCommitteeRelevance.length > 0) {
-        console.log("\n⚠️  COMMITTEE-RELEVANT TRADES:\n");
+        lines.push("\n⚠️  COMMITTEE-RELEVANT TRADES:\n");
         for (const analyzed of report.summary.byCommitteeRelevance.slice(0, 5)) {
           const rel = analyzed.score.explanation.committeeRelevance;
-          console.log(
+          lines.push(
             `   ${analyzed.trade.symbol}: ${analyzed.trade.firstName} ${analyzed.trade.lastName}`
           );
           if (rel) {
             const sectorInfo = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
-            console.log(`      Sector: ${sectorInfo || "N/A"}`);
-            console.log(`      Committees: ${rel.overlappingCommittees.join(", ")}`);
+            lines.push(`      Sector: ${sectorInfo || "N/A"}`);
+            lines.push(`      Committees: ${rel.overlappingCommittees.join(", ")}`);
           }
         }
       }
 
-      console.log("\n" + "=".repeat(60));
+      lines.push("\n" + "=".repeat(60));
+
+      // Output to console
+      const output = lines.join("\n");
+      console.log(output);
+
+      // Save to formatted-reports directory
+      const reportsDir = path.join(process.cwd(), "formatted-reports");
+      await fs.mkdir(reportsDir, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const filename = `analyze-${timestamp}.txt`;
+      await fs.writeFile(path.join(reportsDir, filename), output);
+      console.log(`\n📁 Saved to formatted-reports/${filename}`);
     } catch (error) {
       console.error("❌ Analysis failed:", error);
       process.exit(1);
