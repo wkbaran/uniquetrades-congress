@@ -307,7 +307,8 @@ function buildTraderInput(
     const bioguideId = findMemberByName(
       trade.firstName,
       trade.lastName,
-      committeeData.membership
+      committeeData.membership,
+      committeeData.legislators
     );
     if (bioguideId) {
       committees = getMemberCommittees(bioguideId, committeeData.membership);
