@@ -31,6 +31,10 @@ export const analyzeCommand = new Command("analyze")
     "Skip fetching fresh trade data (use cached)"
   )
   .option(
+    "-r, --refresh",
+    "Force full refresh of trade data instead of incremental update (only when fetching)"
+  )
+  .option(
     "--no-market-data",
     "Skip fetching market data (faster, but no market cap scoring)"
   )
@@ -43,10 +47,11 @@ export const analyzeCommand = new Command("analyze")
       // Fetch or load trade data
       let tradeData;
       if (options.fetchTrades) {
-        console.log("📥 Fetching fresh trade data...\n");
+        console.log("📥 Fetching trade data...\n");
         const fmpClient = createFMPClient();
         const targetDate = getDefaultTargetDate();
-        tradeData = await fetchTrades(fmpClient, targetDate);
+        const refresh = options.refresh || false;
+        tradeData = await fetchTrades(fmpClient, targetDate, 100, refresh);
         console.log("");
       } else {
         console.log("Using cached trade data (use without --no-fetch-trades to refresh)\n");

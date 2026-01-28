@@ -5,13 +5,27 @@ import { saveData, loadData } from "../utils/storage.js";
 const TRADES_FILE = "trades.json";
 
 /**
- * Get the default target date (3 months + 1 day ago)
+ * Get the default target date (1 year ago for refresh mode)
  */
 export function getDefaultTargetDate(): Date {
   const date = new Date();
-  date.setMonth(date.getMonth() - 3);
-  date.setDate(date.getDate() - 1);
+  date.setFullYear(date.getFullYear() - 1);
   return date;
+}
+
+/**
+ * Generate a unique key for a trade to detect duplicates
+ */
+function getTradeKey(trade: FMPTrade): string {
+  return [
+    trade.firstName || "",
+    trade.lastName || "",
+    trade.transactionDate || "",
+    trade.symbol || "",
+    trade.type || "",
+    trade.amount || "",
+    trade.owner || "",
+  ].join("|");
 }
 
 /**
@@ -25,15 +39,92 @@ function hasTradesOlderThan(trades: FMPTrade[], targetDate: Date): boolean {
 }
 
 /**
- * Fetch trades from FMP, paginating until reaching the target date
+ * Get the most recent trade date from an array of trades
+ */
+function getMostRecentTradeDate(trades: FMPTrade[]): Date | null {
+  if (trades.length === 0) return null;
+
+  const dates = trades
+    .map((t) => t.transactionDate)
+    .filter((d): d is string => !!d)
+    .map((d) => new Date(d))
+    .filter((d) => !isNaN(d.getTime()));
+
+  if (dates.length === 0) return null;
+
+  return new Date(Math.max(...dates.map((d) => d.getTime())));
+}
+
+/**
+ * Merge new trades with existing trades, removing duplicates
+ */
+function mergeTrades(existing: FMPTrade[], newTrades: FMPTrade[]): FMPTrade[] {
+  const existingKeys = new Set(existing.map(getTradeKey));
+  const uniqueNewTrades = newTrades.filter((trade) => {
+    const key = getTradeKey(trade);
+    return !existingKeys.has(key);
+  });
+
+  return [...existing, ...uniqueNewTrades];
+}
+
+/**
+ * Fetch trades from FMP, with support for incremental updates
+ *
+ * @param fmpClient - FMP client for API calls
+ * @param targetDate - Date to fetch back to (for refresh mode)
+ * @param limit - Number of trades per page
+ * @param refresh - If true, clears existing data and fetches from targetDate. If false (default), fetches only new trades since most recent existing trade
+ * @returns Trade data
  */
 export async function fetchTrades(
   fmpClient: FMPClient,
   targetDate: Date,
-  limit = 100
+  limit = 100,
+  refresh = false
 ): Promise<TradeData> {
-  const targetDateStr = targetDate.toISOString().split("T")[0];
-  console.log(`Fetching trades from FMP until ${targetDateStr} (limit=${limit} per page)...`);
+  let existingData: TradeData | null = null;
+  let startDate: Date;
+
+  if (refresh) {
+    // Refresh mode: fetch from target date, ignore existing data
+    startDate = targetDate;
+    console.log(`🔄 Refresh mode: Fetching all trades since ${startDate.toISOString().split("T")[0]}`);
+  } else {
+    // Incremental mode: load existing data and fetch only new trades
+    existingData = await loadTrades();
+
+    if (!existingData) {
+      // No existing data, fetch from target date
+      startDate = targetDate;
+      console.log(`📥 No existing data found. Fetching trades since ${startDate.toISOString().split("T")[0]}`);
+    } else {
+      // Find most recent trade date across both chambers
+      const senateMostRecent = getMostRecentTradeDate(existingData.senateTrades);
+      const houseMostRecent = getMostRecentTradeDate(existingData.houseTrades);
+
+      const mostRecentDate = [senateMostRecent, houseMostRecent]
+        .filter((d): d is Date => d !== null)
+        .reduce((latest, current) => (current > latest ? current : latest), new Date(0));
+
+      if (mostRecentDate.getTime() === 0) {
+        // No valid dates in existing data, use target date
+        startDate = targetDate;
+        console.log(`⚠️  No valid dates in existing data. Fetching since ${startDate.toISOString().split("T")[0]}`);
+      } else {
+        // Fetch from one day before most recent to ensure we don't miss anything
+        startDate = new Date(mostRecentDate);
+        startDate.setDate(startDate.getDate() - 1);
+        console.log(
+          `📈 Incremental update: Most recent trade is ${mostRecentDate.toISOString().split("T")[0]}, ` +
+          `fetching since ${startDate.toISOString().split("T")[0]}`
+        );
+      }
+    }
+  }
+
+  const targetDateStr = startDate.toISOString().split("T")[0];
+  console.log(`\nFetching new trades from FMP (limit=${limit} per page)...`);
 
   const allSenateTrades: FMPTrade[] = [];
   const allHouseTrades: FMPTrade[] = [];
@@ -68,7 +159,7 @@ export async function fetchTrades(
       console.log(`    Senate: +${senateTrades.length} trades (total: ${allSenateTrades.length})`);
 
       // Check if we've reached the target date or no more data
-      if (senateTrades.length < limit || hasTradesOlderThan(senateTrades, targetDate)) {
+      if (senateTrades.length < limit || hasTradesOlderThan(senateTrades, startDate)) {
         senateDone = true;
         console.log(`    Senate: reached target date or end of data`);
       }
@@ -82,7 +173,7 @@ export async function fetchTrades(
       console.log(`    House: +${houseTrades.length} trades (total: ${allHouseTrades.length})`);
 
       // Check if we've reached the target date or no more data
-      if (houseTrades.length < limit || hasTradesOlderThan(houseTrades, targetDate)) {
+      if (houseTrades.length < limit || hasTradesOlderThan(houseTrades, startDate)) {
         houseDone = true;
         console.log(`    House: reached target date or end of data`);
       }
@@ -98,28 +189,49 @@ export async function fetchTrades(
     console.warn(`  Warning: reached max pages limit (${maxPages})`);
   }
 
-  // Filter out trades older than target date
-  const filteredSenateTrades = allSenateTrades.filter((trade) => {
+  // Filter out trades older than start date
+  const newSenateTrades = allSenateTrades.filter((trade) => {
     if (!trade.transactionDate) return true;
-    return new Date(trade.transactionDate) >= targetDate;
+    return new Date(trade.transactionDate) >= startDate;
   });
 
-  const filteredHouseTrades = allHouseTrades.filter((trade) => {
+  const newHouseTrades = allHouseTrades.filter((trade) => {
     if (!trade.transactionDate) return true;
-    return new Date(trade.transactionDate) >= targetDate;
+    return new Date(trade.transactionDate) >= startDate;
   });
 
-  console.log(`\nFetched ${page} page(s):`);
-  console.log(`  Senate: ${filteredSenateTrades.length} trades (filtered from ${allSenateTrades.length})`);
-  console.log(`  House: ${filteredHouseTrades.length} trades (filtered from ${allHouseTrades.length})`);
+  console.log(`\nFetched ${page} page(s) from API:`);
+  console.log(`  Senate: ${newSenateTrades.length} trades (filtered from ${allSenateTrades.length})`);
+  console.log(`  House: ${newHouseTrades.length} trades (filtered from ${allHouseTrades.length})`);
+
+  // Merge with existing data if in incremental mode
+  let finalSenateTrades: FMPTrade[];
+  let finalHouseTrades: FMPTrade[];
+
+  if (!refresh && existingData) {
+    console.log(`\n🔗 Merging with existing data...`);
+    console.log(`  Existing: ${existingData.senateTrades.length} Senate, ${existingData.houseTrades.length} House`);
+
+    finalSenateTrades = mergeTrades(existingData.senateTrades, newSenateTrades);
+    finalHouseTrades = mergeTrades(existingData.houseTrades, newHouseTrades);
+
+    const senateAdded = finalSenateTrades.length - existingData.senateTrades.length;
+    const houseAdded = finalHouseTrades.length - existingData.houseTrades.length;
+
+    console.log(`  Added: ${senateAdded} new Senate trades, ${houseAdded} new House trades`);
+    console.log(`  Final: ${finalSenateTrades.length} Senate, ${finalHouseTrades.length} House`);
+  } else {
+    finalSenateTrades = newSenateTrades;
+    finalHouseTrades = newHouseTrades;
+  }
 
   const tradeData: TradeData = {
-    senateTrades: filteredSenateTrades,
-    houseTrades: filteredHouseTrades,
+    senateTrades: finalSenateTrades,
+    houseTrades: finalHouseTrades,
   };
 
   await saveData(TRADES_FILE, tradeData);
-  console.log(`Trades saved to ${TRADES_FILE}`);
+  console.log(`\n💾 Trades saved to ${TRADES_FILE}`);
 
   return tradeData;
 }

@@ -18,6 +18,10 @@ export const runCommand = new Command("run")
     "Skip fetching trade data (use cached)"
   )
   .option(
+    "-r, --refresh",
+    "Force full refresh of trade data instead of incremental update"
+  )
+  .option(
     "--min-score <number>",
     "Minimum uniqueness score to show",
     "40"
@@ -66,7 +70,8 @@ export const runCommand = new Command("run")
       if (!options.skipTrades) {
         const fmpClient = createFMPClient();
         const targetDate = getDefaultTargetDate();
-        tradeData = await fetchTrades(fmpClient, targetDate);
+        const refresh = options.refresh || false;
+        tradeData = await fetchTrades(fmpClient, targetDate, 100, refresh);
 
         const senateStats = getTradeStats(tradeData.senateTrades);
         const houseStats = getTradeStats(tradeData.houseTrades);

@@ -36,21 +36,35 @@ npm start -- analyze
 - `--top <number>` - Limit to top N results, 0 = all (default: 0)
 - `--type <type>` - Filter by trade type: `purchase` (default), `sale`, or `all`
 - `--no-fetch-trades` - Skip fetching fresh data, use cached
+- `-r, --refresh` - Force full refresh instead of incremental update (only when fetching)
 - `--no-market-data` - Skip fetching market data (faster, but no market cap scoring)
 - `--json` - Output raw JSON instead of formatted text
 
 ### Fetch Trades
 
-Fetch congressional trades going back to a target date:
+Fetch congressional trades with **incremental updates** (fetches only new trades by default):
 
 ```bash
 npm start -- fetch:trades
 ```
 
+**Incremental Mode (default):**
+- Loads existing trade data
+- Fetches only trades newer than the most recent trade in the database
+- Merges new trades with existing data, avoiding duplicates
+- Perfect for daily/weekly updates
+
+**Refresh Mode:**
+```bash
+npm start -- fetch:trades --refresh
+```
+- Clears existing data and fetches all trades from the target date
+- Use this for the initial fetch or when you want to rebuild the database
+
 **Options:**
-- `--since <date>` - Fetch trades since date (YYYY-MM-DD). Default: 3 months ago
+- `-r, --refresh` - Force full refresh from target date instead of incremental update
+- `--since <date>` - Target date for refresh mode (YYYY-MM-DD). Default: 1 year ago
 - `--limit <number>` - Trades per page (default: 100)
-- `-f, --force` - Force fetch even if data is recent
 
 ### Sales Report
 
@@ -76,9 +90,14 @@ npm start -- fetch:committees
 - `GET /stable/senate-latest?page={n}&limit={n}` - Senate trades
 - `GET /stable/house-latest?page={n}&limit={n}` - House trades
 
-The tool paginates through these endpoints until reaching the target date (default: 3 months ago), then filters out any trades older than the target date.
+**Fetching Behavior:**
+- **Incremental mode (default):** Fetches only trades newer than the most recent trade in the local database, then merges with existing data
+- **Refresh mode (`--refresh`):** Fetches all trades going back to the target date (default: 1 year ago), replacing existing data
+- Duplicate detection uses: `firstName`, `lastName`, `transactionDate`, `symbol`, `type`, `amount`, `owner`
 
 **Fields used:** `symbol`, `firstName`, `lastName`, `transactionDate`, `type`, `amount`, `owner`, `assetType`, `assetDescription`
+
+**Storage:** Trade data is stored locally in `data/trades.json` with a timestamp, enabling fast incremental updates
 
 ### Market Data (for scoring)
 **Source:** FMP REST API
