@@ -68,6 +68,47 @@ Fetch committee membership data for committee relevance scoring:
 npm start -- fetch:committees
 ```
 
+## Data Sources
+
+### Congressional Trade Data
+**Source:** FMP REST API
+**Endpoints:**
+- `GET /stable/senate-latest?page={n}&limit={n}` - Senate trades
+- `GET /stable/house-latest?page={n}&limit={n}` - House trades
+
+The tool paginates through these endpoints until reaching the target date (default: 3 months ago), then filters out any trades older than the target date.
+
+**Fields used:** `symbol`, `firstName`, `lastName`, `transactionDate`, `type`, `amount`, `owner`, `assetType`, `assetDescription`
+
+### Market Data (for scoring)
+**Source:** FMP REST API
+**Endpoint:** `GET /stable/profile?symbol={symbol}`
+
+Fetched during analysis for each unique symbol in the trade data. Provides:
+- `marketCap` - Company market capitalization in dollars
+- `sector` - FMP sector classification (e.g., "Technology", "Healthcare")
+- `industry` - FMP industry classification (e.g., "Software - Application", "Banks - Diversified")
+
+### Committee Membership Data
+**Source:** GitHub raw files from [unitedstates/congress-legislators](https://github.com/unitedstates/congress-legislators)
+
+**Files fetched:**
+- `legislators-current.yaml` - Current congress member info (name, party, terms)
+- `committee-membership-current.yaml` - Which members sit on which committees
+- `committees-current.yaml` - Committee metadata (names, IDs)
+
+This data is used to:
+1. Look up a trader's committee assignments by matching their name
+2. Determine their party affiliation (R/D)
+
+### Committee-to-Sector Mapping
+**Source:** Local taxonomy file (`src/data/committee-sector-taxonomy.ts`)
+
+A manually curated mapping from congressional committees to FMP sectors/industries. For example:
+- `SSBK` (Senate Banking) → Financial Services sector, Banks/Insurance industries
+- `HSAG` (House Agriculture) → Consumer Defensive sector, Agricultural Inputs industry
+- `SSAS` (Senate Armed Services) → Industrials sector, Aerospace & Defense industry
+
 ## Uniqueness Scoring
 
 Each trade is scored on a 0-100 scale based on six weighted factors. Higher scores indicate more "unique" or potentially interesting trades.
@@ -86,61 +127,101 @@ Each trade is scored on a 0-100 scale based on six weighted factors. Higher scor
 ### Factor Calculations
 
 #### Market Cap Score (0-100)
-Based on the company's market capitalization:
-- **Micro cap** (< $300M): 100 points
-- **Small cap** (< $2B): 75 points
-- **Mid cap** (< $10B): 25 points
-- **Large cap** (≥ $10B): 0 points
+
+**Data source:** FMP `/stable/profile` endpoint → `marketCap` field
+
+**Calculation:**
+1. Fetch the stock's profile from FMP
+2. Read the `marketCap` value (in dollars)
+3. Score based on thresholds:
+   - **Micro cap** (< $300M): 100 points
+   - **Small cap** (< $2B): 75 points
+   - **Mid cap** (< $10B): 25 points
+   - **Large cap** (≥ $10B): 0 points
+   - **No data available**: 0 points
 
 *Rationale: Smaller companies receive less analyst coverage, so congressional trades may represent unique information.*
 
 #### Conviction Score (0-100)
-Based on trade size relative to the trader's average:
-- **5x+ average**: 100 points (very high conviction)
-- **2x-5x average**: 75 points (high conviction)
-- **1.5x-2x average**: 50 points
-- **1x-1.5x average**: 25 points
-- **Below average**: 0 points
+
+**Data source:** Trade `amount` field from FMP trade endpoints, compared against trader's historical average
+
+**Calculation:**
+1. Parse the trade's amount range (e.g., "$15,001 - $50,000" → midpoint $32,500)
+2. Calculate the trader's average trade size from all their trades in the dataset
+3. Compute multiplier: `tradeSize / averageTradeSize`
+4. Score based on multiplier:
+   - **5x+ average**: 100 points (very high conviction)
+   - **2x-5x average**: 75 points (high conviction)
+   - **1.5x-2x average**: 50 points
+   - **1x-1.5x average**: 25 points
+   - **Below average**: 0 points
 
 *Rationale: Unusually large trades may indicate stronger conviction about the position.*
 
 #### Rarity Score (0-100)
-Based on how often congress members have traded this stock:
-- **Unique** (≤1 trade): 100 points
-- **Rare** (≤3 trades): 75 points
-- **Uncommon** (≤10 trades): 50 points
-- **Common** (>10 trades): 0 points
-- **Bonus**: +25 if only one trader, +10 if ≤3 traders
+
+**Data source:** Aggregated from all trades in the fetched dataset
+
+**Calculation:**
+1. Count total congressional trades for this symbol across the entire dataset
+2. Count unique traders (congress members) who have traded this symbol
+3. Score based on total trades:
+   - **Unique** (≤1 trade): 100 points
+   - **Rare** (≤3 trades): 75 points
+   - **Uncommon** (≤10 trades): 50 points
+   - **Common** (>10 trades): 0 points
+4. Add bonus for concentrated interest:
+   - Only 1 unique trader: +25 points
+   - ≤3 unique traders: +10 points
+5. Cap at 100 points
 
 *Rationale: Stocks that congress members rarely trade may represent unique situations.*
 
 #### Committee Relevance Score (0-100)
-Based on overlap between the trader's committee assignments and the stock's sector/industry:
-- **Multiple committee overlaps**: 100 points
-- **Single committee overlap**: 75 points
-- **No overlap**: 0 points
+
+**Data sources:**
+- Trader's committees: GitHub `committee-membership-current.yaml`
+- Stock's sector/industry: FMP `/stable/profile` endpoint
+- Committee-to-sector mapping: Local taxonomy file
+
+**Calculation:**
+1. Look up the trader's committee assignments from GitHub data
+2. Fetch the stock's sector and industry from FMP
+3. For each of the trader's committees, check if it has jurisdiction over the stock's sector or industry using the local taxonomy
+4. Score based on overlaps:
+   - **Multiple committee overlaps**: 100 points
+   - **Single committee overlap**: 75 points
+   - **No overlap**: 0 points
 
 *Rationale: Members may have industry-specific knowledge from their committee work.*
 
-The tool maps FMP's sector/industry taxonomy to congressional committees. For example:
-- Senate Banking Committee → Financial Services sector
-- House Energy & Commerce → Healthcare, Utilities sectors
-- House Armed Services → Industrials sector (Aerospace & Defense)
+**Example:** If Senator X sits on the Banking Committee (SSBK) and trades JPMorgan (sector: "Financial Services", industry: "Banks - Diversified"), this scores 75 points because SSBK has jurisdiction over financial services.
 
 #### Derivative Score (0-100)
-Based on the type of asset traded:
-- **Options/Warrants/Rights**: 100 points
-- **Futures/Other derivatives**: 75 points
-- **Regular stock**: 0 points
+
+**Data source:** Trade `assetType` field from FMP trade endpoints
+
+**Calculation:**
+1. Read the `assetType` field from the trade
+2. Check for derivative keywords:
+   - Contains "option", "warrant", or "right": 100 points
+   - Contains "future" or "derivative": 75 points
+   - Regular stock or other: 0 points
 
 *Rationale: Derivatives have expiration dates, suggesting timing-sensitive information.*
 
 #### Ownership Score (0-100)
-Based on who owns the asset:
-- **Child/Dependent**: 100 points
-- **Spouse**: 75 points
-- **Joint**: 25 points
-- **Self**: 0 points
+
+**Data source:** Trade `owner` field from FMP trade endpoints
+
+**Calculation:**
+1. Read the `owner` field from the trade
+2. Score based on ownership type:
+   - **Child/Dependent**: 100 points
+   - **Spouse**: 75 points
+   - **Joint**: 25 points
+   - **Self**: 0 points
 
 *Rationale: Indirect ownership may indicate an attempt to distance from the trade.*
 
@@ -170,12 +251,6 @@ Reports are saved to the `formatted-reports/` directory with timestamps.
      - Rarity: rare (2 total congress trades)
      - Indirect Ownership: Spouse
 ```
-
-## Data Sources
-
-- **Trade Data**: FMP Senate/House trading endpoints
-- **Market Data**: FMP stock profile endpoint (sector, industry, market cap)
-- **Committee Data**: [unitedstates/congress-legislators](https://github.com/unitedstates/congress-legislators) GitHub repository
 
 ## Disclaimer
 
