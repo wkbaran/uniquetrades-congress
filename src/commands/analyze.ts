@@ -3,7 +3,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { loadTrades, fetchTrades, getDefaultTargetDate } from "../services/trade-service.js";
 import { loadCommitteeData } from "../services/committee-service.js";
-import { analyzeTrades, formatTradeReport } from "../services/analysis-service.js";
+import { analyzeTrades, formatTradeReport, getCommitteeNames } from "../services/analysis-service.js";
 import { FMPMarketDataProvider } from "../data/fmp-provider.js";
 import { createFMPClient } from "../services/fmp-client.js";
 import type { ScoringConfig } from "../scoring/types.js";
@@ -199,8 +199,15 @@ export const analyzeCommand = new Command("analyze")
           );
           if (rel) {
             const sectorInfo = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
-            lines.push(`      Sector: ${sectorInfo || "N/A"}`);
-            lines.push(`      Committees: ${rel.overlappingCommittees.join(", ")}`);
+            lines.push(`      Stock: ${sectorInfo || "N/A"}`);
+
+            // Show committee names
+            const committeeNames = getCommitteeNames(rel.overlappingCommittees, committeeData);
+            if (committeeNames.length > 0) {
+              lines.push(`      Relevant Committees: ${committeeNames.join(", ")}`);
+            } else {
+              lines.push(`      Relevant Committees: ${rel.overlappingCommittees.join(", ")}`);
+            }
           }
         }
       }

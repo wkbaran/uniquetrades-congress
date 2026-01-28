@@ -35,6 +35,7 @@ export interface AnalyzedTrade {
   chamber: "senate" | "house";
   trader: TraderInput;
   score: UniquenessResult;
+  committeeNames?: string[];
 }
 
 export interface AnalysisReport {
@@ -198,11 +199,17 @@ export async function analyzeTrades(
       config
     );
 
+    // Get committee names for display
+    const committeeNames = trader.committees
+      .map((id) => getCommitteeName(id, committeeData))
+      .filter((name): name is string => name !== null);
+
     scoredTrades.push({
       trade,
       chamber,
       trader,
       score,
+      committeeNames,
     });
   }
 
@@ -326,12 +333,42 @@ function buildTraderInput(
   };
 }
 
+/**
+ * Get committee name from ID
+ */
+function getCommitteeName(
+  committeeId: string,
+  committeeData: CommitteeData | null
+): string | null {
+  if (!committeeData) return null;
+
+  const committee = committeeData.committees.find(
+    (c) => c.thomas_id === committeeId ||
+           c.house_committee_id === committeeId ||
+           c.senate_committee_id === committeeId
+  );
+
+  return committee?.name || null;
+}
+
+/**
+ * Get committee names from IDs (exported for use in report formatting)
+ */
+export function getCommitteeNames(
+  committeeIds: string[],
+  committeeData: CommitteeData | null
+): string[] {
+  return committeeIds
+    .map((id) => getCommitteeName(id, committeeData))
+    .filter((name): name is string => name !== null);
+}
+
 // ============================================
 // Report formatting
 // ============================================
 
 export function formatTradeReport(analyzed: AnalyzedTrade): string {
-  const { trade, chamber, trader, score } = analyzed;
+  const { trade, chamber, trader, score, committeeNames } = analyzed;
 
   // Format party as (R), (D), or empty
   const partyLabel = trader.party
@@ -341,11 +378,29 @@ export function formatTradeReport(analyzed: AnalyzedTrade): string {
   const lines = [
     `📊 ${trade.symbol || "N/A"} - ${trade.assetDescription || "Unknown"}`,
     `   Trader: ${trade.firstName} ${trade.lastName}${partyLabel} (${chamber})`,
+  ];
+
+  // Add committees if available
+  if (committeeNames && committeeNames.length > 0) {
+    lines.push(`   Committees: ${committeeNames.join(", ")}`);
+  }
+
+  lines.push(
     `   Type: ${trade.type || "N/A"} | Amount: ${trade.amount || "N/A"}`,
     `   Date: ${trade.transactionDate || "N/A"}`,
     `   Score: ${score.overallScore}/100`,
-    `   Factors:`,
-  ];
+  );
+
+  // Add stock sector/industry if available
+  if (score.explanation.committeeRelevance) {
+    const rel = score.explanation.committeeRelevance;
+    const sectorInfo = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
+    if (sectorInfo) {
+      lines.push(`   Stock: ${sectorInfo}`);
+    }
+  }
+
+  lines.push(`   Factors:`);
 
   // Market cap
   if (score.explanation.marketCap) {
@@ -374,9 +429,8 @@ export function formatTradeReport(analyzed: AnalyzedTrade): string {
   // Committee relevance
   if (score.flags.hasCommitteeRelevance && score.explanation.committeeRelevance) {
     const rel = score.explanation.committeeRelevance;
-    const sectorInfo = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
     lines.push(
-      `     ⚠️ Committee Relevance: ${sectorInfo} (${rel.overlappingCommittees.join(", ")})`
+      `     ⚠️  Committee Oversight: ${rel.overlappingCommittees.join(", ")}`
     );
   }
 
