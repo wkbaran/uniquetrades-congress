@@ -1,12 +1,12 @@
 import { Command } from "commander";
-import { fetchTrades, getTradeStats } from "../services/trade-service.js";
+import { fetchTrades, getTradeStats, getDefaultTargetDate } from "../services/trade-service.js";
 import { createFMPClient } from "../services/fmp-client.js";
 import { getDataAge, formatDuration } from "../utils/storage.js";
 
 export const fetchTradesCommand = new Command("fetch:trades")
-  .description("Fetch latest congressional trades from FMP")
+  .description("Fetch congressional trades from FMP going back to a target date")
   .option("-f, --force", "Force fetch even if data is recent")
-  .option("--page <number>", "Page number (starts at 0)", "0")
+  .option("--since <date>", "Fetch trades since this date (YYYY-MM-DD). Default: 3 months + 1 day ago")
   .option("--limit <number>", "Number of trades per page", "100")
   .action(async (options) => {
     try {
@@ -24,13 +24,24 @@ export const fetchTradesCommand = new Command("fetch:trades")
         }
       }
 
-      const page = parseInt(options.page, 10);
+      // Parse target date
+      let targetDate: Date;
+      if (options.since) {
+        targetDate = new Date(options.since);
+        if (isNaN(targetDate.getTime())) {
+          console.error(`❌ Invalid date format: ${options.since}. Use YYYY-MM-DD.`);
+          process.exit(1);
+        }
+      } else {
+        targetDate = getDefaultTargetDate();
+      }
+
       const limit = parseInt(options.limit, 10);
 
-      console.log(`Fetching trades from FMP (page=${page}, limit=${limit})...\n`);
+      console.log(`Fetching trades since ${targetDate.toISOString().split("T")[0]}...\n`);
 
       const fmpClient = createFMPClient();
-      const data = await fetchTrades(fmpClient, page, limit);
+      const data = await fetchTrades(fmpClient, targetDate, limit);
 
       const senateStats = getTradeStats(data.senateTrades);
       const houseStats = getTradeStats(data.houseTrades);
@@ -47,6 +58,17 @@ export const fetchTradesCommand = new Command("fetch:trades")
       console.log(`     - ${houseStats.uniqueTraders} unique traders`);
       console.log(`     - ${houseStats.uniqueSymbols} unique symbols`);
       console.log(`     - ${houseStats.purchases} purchases, ${houseStats.sales} sales`);
+
+      // Show date range
+      const allTrades = [...data.senateTrades, ...data.houseTrades];
+      const dates = allTrades
+        .map((t) => t.transactionDate)
+        .filter((d): d is string => !!d)
+        .sort();
+
+      if (dates.length > 0) {
+        console.log(`\n   Date range: ${dates[0]} to ${dates[dates.length - 1]}`);
+      }
     } catch (error) {
       console.error("❌ Failed to fetch trades:", error);
       process.exit(1);

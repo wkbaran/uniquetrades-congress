@@ -5,27 +5,117 @@ import { saveData, loadData } from "../utils/storage.js";
 const TRADES_FILE = "trades.json";
 
 /**
- * Fetch latest trades from FMP
+ * Get the default target date (3 months + 1 day ago)
+ */
+export function getDefaultTargetDate(): Date {
+  const date = new Date();
+  date.setMonth(date.getMonth() - 3);
+  date.setDate(date.getDate() - 1);
+  return date;
+}
+
+/**
+ * Check if any trade in the array is older than the target date
+ */
+function hasTradesOlderThan(trades: FMPTrade[], targetDate: Date): boolean {
+  return trades.some((trade) => {
+    if (!trade.transactionDate) return false;
+    return new Date(trade.transactionDate) < targetDate;
+  });
+}
+
+/**
+ * Fetch trades from FMP, paginating until reaching the target date
  */
 export async function fetchTrades(
   fmpClient: FMPClient,
-  page = 0,
+  targetDate: Date,
   limit = 100
 ): Promise<TradeData> {
-  console.log(`Fetching trades from FMP (page=${page}, limit=${limit})...`);
+  const targetDateStr = targetDate.toISOString().split("T")[0];
+  console.log(`Fetching trades from FMP until ${targetDateStr} (limit=${limit} per page)...`);
 
-  const [senateTrades, houseTrades] = await Promise.all([
-    fmpClient.getSenateTrades(page, limit),
-    fmpClient.getHouseTrades(page, limit),
-  ]);
+  const allSenateTrades: FMPTrade[] = [];
+  const allHouseTrades: FMPTrade[] = [];
 
-  console.log(
-    `Fetched ${senateTrades.length} Senate trades and ${houseTrades.length} House trades`
-  );
+  let senateDone = false;
+  let houseDone = false;
+  let page = 0;
+  const maxPages = 50; // Safety limit
+
+  while ((!senateDone || !houseDone) && page < maxPages) {
+    console.log(`  Fetching page ${page}...`);
+
+    const fetches: Promise<FMPTrade[]>[] = [];
+
+    if (!senateDone) {
+      fetches.push(fmpClient.getSenateTrades(page, limit));
+    } else {
+      fetches.push(Promise.resolve([]));
+    }
+
+    if (!houseDone) {
+      fetches.push(fmpClient.getHouseTrades(page, limit));
+    } else {
+      fetches.push(Promise.resolve([]));
+    }
+
+    const [senateTrades, houseTrades] = await Promise.all(fetches);
+
+    // Add trades to accumulator
+    if (senateTrades.length > 0) {
+      allSenateTrades.push(...senateTrades);
+      console.log(`    Senate: +${senateTrades.length} trades (total: ${allSenateTrades.length})`);
+
+      // Check if we've reached the target date or no more data
+      if (senateTrades.length < limit || hasTradesOlderThan(senateTrades, targetDate)) {
+        senateDone = true;
+        console.log(`    Senate: reached target date or end of data`);
+      }
+    } else {
+      senateDone = true;
+      console.log(`    Senate: no more data`);
+    }
+
+    if (houseTrades.length > 0) {
+      allHouseTrades.push(...houseTrades);
+      console.log(`    House: +${houseTrades.length} trades (total: ${allHouseTrades.length})`);
+
+      // Check if we've reached the target date or no more data
+      if (houseTrades.length < limit || hasTradesOlderThan(houseTrades, targetDate)) {
+        houseDone = true;
+        console.log(`    House: reached target date or end of data`);
+      }
+    } else {
+      houseDone = true;
+      console.log(`    House: no more data`);
+    }
+
+    page++;
+  }
+
+  if (page >= maxPages) {
+    console.warn(`  Warning: reached max pages limit (${maxPages})`);
+  }
+
+  // Filter out trades older than target date
+  const filteredSenateTrades = allSenateTrades.filter((trade) => {
+    if (!trade.transactionDate) return true;
+    return new Date(trade.transactionDate) >= targetDate;
+  });
+
+  const filteredHouseTrades = allHouseTrades.filter((trade) => {
+    if (!trade.transactionDate) return true;
+    return new Date(trade.transactionDate) >= targetDate;
+  });
+
+  console.log(`\nFetched ${page} page(s):`);
+  console.log(`  Senate: ${filteredSenateTrades.length} trades (filtered from ${allSenateTrades.length})`);
+  console.log(`  House: ${filteredHouseTrades.length} trades (filtered from ${allHouseTrades.length})`);
 
   const tradeData: TradeData = {
-    senateTrades,
-    houseTrades,
+    senateTrades: filteredSenateTrades,
+    houseTrades: filteredHouseTrades,
   };
 
   await saveData(TRADES_FILE, tradeData);

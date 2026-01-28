@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { fetchAllCommitteeData, loadCommitteeData } from "../services/committee-service.js";
-import { fetchTrades, loadTrades, getTradeStats } from "../services/trade-service.js";
+import { fetchTrades, loadTrades, getTradeStats, getDefaultTargetDate } from "../services/trade-service.js";
 import { analyzeTrades, formatTradeReport } from "../services/analysis-service.js";
 import { createFMPClient } from "../services/fmp-client.js";
 import { createFMPProvider } from "../data/fmp-provider.js";
@@ -65,7 +65,8 @@ export const runCommand = new Command("run")
 
       if (!options.skipTrades) {
         const fmpClient = createFMPClient();
-        tradeData = await fetchTrades(fmpClient);
+        const targetDate = getDefaultTargetDate();
+        tradeData = await fetchTrades(fmpClient, targetDate);
 
         const senateStats = getTradeStats(tradeData.senateTrades);
         const houseStats = getTradeStats(tradeData.houseTrades);
