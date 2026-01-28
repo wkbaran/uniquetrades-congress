@@ -4,26 +4,12 @@ import { createFMPClient } from "../services/fmp-client.js";
 import { getDataAge, formatDuration } from "../utils/storage.js";
 
 export const fetchTradesCommand = new Command("fetch:trades")
-  .description("Fetch congressional trades from FMP going back to a target date")
-  .option("-f, --force", "Force fetch even if data is recent")
-  .option("--since <date>", "Fetch trades since this date (YYYY-MM-DD). Default: 3 months + 1 day ago")
+  .description("Fetch congressional trades from FMP (incremental by default)")
+  .option("-r, --refresh", "Force full refresh from target date instead of incremental update")
+  .option("--since <date>", "Target date for refresh mode (YYYY-MM-DD). Default: 1 year ago")
   .option("--limit <number>", "Number of trades per page", "100")
   .action(async (options) => {
     try {
-      // Check if we have recent data
-      const age = await getDataAge("trades.json");
-
-      if (age.exists && !options.force) {
-        const hoursSinceUpdate = (age.ageMs || 0) / (1000 * 60 * 60);
-        if (hoursSinceUpdate < 1) {
-          console.log(
-            `Trade data was fetched ${formatDuration(age.ageMs || 0)} ago.`
-          );
-          console.log("Use --force to fetch anyway.");
-          return;
-        }
-      }
-
       // Parse target date
       let targetDate: Date;
       if (options.since) {
@@ -37,11 +23,10 @@ export const fetchTradesCommand = new Command("fetch:trades")
       }
 
       const limit = parseInt(options.limit, 10);
-
-      console.log(`Fetching trades since ${targetDate.toISOString().split("T")[0]}...\n`);
+      const refresh = options.refresh || false;
 
       const fmpClient = createFMPClient();
-      const data = await fetchTrades(fmpClient, targetDate, limit);
+      const data = await fetchTrades(fmpClient, targetDate, limit, refresh);
 
       const senateStats = getTradeStats(data.senateTrades);
       const houseStats = getTradeStats(data.houseTrades);
