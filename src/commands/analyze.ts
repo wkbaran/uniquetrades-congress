@@ -135,9 +135,18 @@ export const analyzeCommand = new Command("analyze")
       lines.push(reportTitle);
       lines.push("=".repeat(60));
       lines.push(`Generated: ${report.generatedAt}`);
+
+      // Calculate date range from trades
+      const allDates = report.scoredTrades
+        .map((t) => t.trade.transactionDate)
+        .filter((d): d is string => !!d)
+        .sort();
+      if (allDates.length > 0) {
+        lines.push(`Date Range: ${allDates[0]} to ${allDates[allDates.length - 1]}`);
+      }
+
       lines.push(`Total Trades Analyzed: ${report.totalTradesAnalyzed}`);
       lines.push(`Trades Scoring >= ${minScore}: ${filteredTrades.length}`);
-      lines.push(`Symbol Stats: ${report.summary.symbolStats.uniqueSymbols} unique, ${report.summary.symbolStats.rareSymbols} rare`);
       lines.push("");
 
       const tradesToShow = topN > 0 ? filteredTrades.slice(0, topN) : filteredTrades;
