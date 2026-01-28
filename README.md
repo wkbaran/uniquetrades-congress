@@ -281,27 +281,40 @@ Reports are saved to the `formatted-reports/` directory with timestamps.
 
 ### Sample Output
 
+**Trade without committee relevance:**
 ```
 📊 FMAO - Farmers & Merchants Bancorp Inc
    Trader: Robert E. Latta (R) (house)
-   Committees: House Committee on Energy and Commerce
    Type: Purchase | Amount: $1,001 - $15,000
    Date: 2026-01-20
-   Stock: Financials / Banks - Regional
    Score: 50/100
    Factors:
      - Market Cap: $352M (small)
      - Rarity: unique (1 total congress trades)
      - Indirect Ownership: Spouse
-     ⚠️  Committee Oversight: House Committee on Financial Services
+```
+
+**Trade with committee relevance (potential oversight concern):**
+```
+📊 PG - The Procter & Gamble Co
+   Trader: David Taylor (R) (house)
+   Type: Purchase | Amount: $1,001 - $15,000
+   Date: 2026-01-09
+   Score: 36/100
+   Factors:
+     - Market Cap: $345B (large)
+     - Rarity: unique (1 total congress trades)
+     ⚠️  Committee Relevance: House Committee on Agriculture
+        Sector: Consumer Defensive | Industry: Household & Personal Products
 ```
 
 The report includes:
 - **Trader info**: Name, party (R/D), chamber
-- **Committees**: Full committee names the member serves on
-- **Stock info**: Company name, sector, and industry classification
-- **Scoring**: Overall score and breakdown by factor
-- **Committee relevance**: Flags when a member trades in a sector their committee oversees
+- **Trade details**: Type, amount range, transaction date
+- **Scoring**: Overall score (0-100) and breakdown by factor
+- **Committee relevance**: Only shown when a member's committee has jurisdiction over the stock's sector/industry, displaying:
+  - Which committee(s) have oversight
+  - The stock's sector and industry classification
 
 ## Disclaimer
 

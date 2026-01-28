@@ -35,7 +35,7 @@ export interface AnalyzedTrade {
   chamber: "senate" | "house";
   trader: TraderInput;
   score: UniquenessResult;
-  committeeNames?: string[];
+  committeeData?: CommitteeData | null;
 }
 
 export interface AnalysisReport {
@@ -199,17 +199,12 @@ export async function analyzeTrades(
       config
     );
 
-    // Get committee names for display
-    const committeeNames = trader.committees
-      .map((id) => getCommitteeName(id, committeeData))
-      .filter((name): name is string => name !== null);
-
     scoredTrades.push({
       trade,
       chamber,
       trader,
       score,
-      committeeNames,
+      committeeData,
     });
   }
 
@@ -368,7 +363,7 @@ export function getCommitteeNames(
 // ============================================
 
 export function formatTradeReport(analyzed: AnalyzedTrade): string {
-  const { trade, chamber, trader, score, committeeNames } = analyzed;
+  const { trade, chamber, trader, score, committeeData } = analyzed;
 
   // Format party as (R), (D), or empty
   const partyLabel = trader.party
@@ -378,29 +373,11 @@ export function formatTradeReport(analyzed: AnalyzedTrade): string {
   const lines = [
     `📊 ${trade.symbol || "N/A"} - ${trade.assetDescription || "Unknown"}`,
     `   Trader: ${trade.firstName} ${trade.lastName}${partyLabel} (${chamber})`,
-  ];
-
-  // Add committees if available
-  if (committeeNames && committeeNames.length > 0) {
-    lines.push(`   Committees: ${committeeNames.join(", ")}`);
-  }
-
-  lines.push(
     `   Type: ${trade.type || "N/A"} | Amount: ${trade.amount || "N/A"}`,
     `   Date: ${trade.transactionDate || "N/A"}`,
     `   Score: ${score.overallScore}/100`,
-  );
-
-  // Add stock sector/industry if available
-  if (score.explanation.committeeRelevance) {
-    const rel = score.explanation.committeeRelevance;
-    const sectorInfo = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
-    if (sectorInfo) {
-      lines.push(`   Stock: ${sectorInfo}`);
-    }
-  }
-
-  lines.push(`   Factors:`);
+    `   Factors:`,
+  ];
 
   // Market cap
   if (score.explanation.marketCap) {
@@ -429,9 +406,24 @@ export function formatTradeReport(analyzed: AnalyzedTrade): string {
   // Committee relevance
   if (score.flags.hasCommitteeRelevance && score.explanation.committeeRelevance) {
     const rel = score.explanation.committeeRelevance;
-    lines.push(
-      `     ⚠️  Committee Oversight: ${rel.overlappingCommittees.join(", ")}`
-    );
+
+    // Get the actual committee names from IDs
+    const relevantCommitteeNames = getCommitteeNames(rel.overlappingCommittees, committeeData || null);
+
+    // Build the display
+    const committeesDisplay = relevantCommitteeNames.length > 0
+      ? relevantCommitteeNames.join(", ")
+      : rel.overlappingCommittees.join(", ");
+
+    lines.push(`     ⚠️  Committee Relevance: ${committeesDisplay}`);
+
+    // Add sector/industry info
+    const sectorParts: string[] = [];
+    if (rel.stockSector) sectorParts.push(`Sector: ${rel.stockSector}`);
+    if (rel.stockIndustry) sectorParts.push(`Industry: ${rel.stockIndustry}`);
+    if (sectorParts.length > 0) {
+      lines.push(`        ${sectorParts.join(" | ")}`);
+    }
   }
 
   // Derivative
