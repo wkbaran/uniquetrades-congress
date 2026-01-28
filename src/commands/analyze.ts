@@ -1,10 +1,11 @@
 import { Command } from "commander";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { loadTrades } from "../services/trade-service.js";
+import { loadTrades, fetchTrades, getDefaultTargetDate } from "../services/trade-service.js";
 import { loadCommitteeData } from "../services/committee-service.js";
 import { analyzeTrades, formatTradeReport } from "../services/analysis-service.js";
 import { createFMPProvider } from "../data/fmp-provider.js";
+import { createFMPClient } from "../services/fmp-client.js";
 import type { ScoringConfig } from "../scoring/types.js";
 import { DEFAULT_SCORING_CONFIG } from "../scoring/types.js";
 
@@ -26,6 +27,10 @@ export const analyzeCommand = new Command("analyze")
     "purchase"
   )
   .option(
+    "--no-fetch-trades",
+    "Skip fetching fresh trade data (use cached)"
+  )
+  .option(
     "--no-market-data",
     "Skip fetching market data (faster, but no market cap scoring)"
   )
@@ -35,18 +40,28 @@ export const analyzeCommand = new Command("analyze")
   )
   .action(async (options) => {
     try {
-      // Load cached data
-      const [tradeData, committeeData] = await Promise.all([
-        loadTrades(),
-        loadCommitteeData(),
-      ]);
+      // Fetch or load trade data
+      let tradeData;
+      if (options.fetchTrades) {
+        console.log("📥 Fetching fresh trade data...\n");
+        const fmpClient = createFMPClient();
+        const targetDate = getDefaultTargetDate();
+        tradeData = await fetchTrades(fmpClient, targetDate);
+        console.log("");
+      } else {
+        console.log("Using cached trade data (use without --no-fetch-trades to refresh)\n");
+        tradeData = await loadTrades();
+      }
 
       if (!tradeData) {
         console.error(
-          "❌ No trade data found. Run 'fetch:trades' first."
+          "❌ No trade data found. Run without --no-fetch-trades to fetch."
         );
         process.exit(1);
       }
+
+      // Load committee data
+      const committeeData = await loadCommitteeData();
 
       if (!committeeData) {
         console.warn(
