@@ -3,7 +3,7 @@ import { fetchAllCommitteeData, loadCommitteeData } from "../services/committee-
 import { fetchTrades, loadTrades, getTradeStats, getDefaultTargetDate } from "../services/trade-service.js";
 import { analyzeTrades, formatTradeReport } from "../services/analysis-service.js";
 import { createFMPClient } from "../services/fmp-client.js";
-import { createFMPProvider } from "../data/fmp-provider.js";
+import { FMPMarketDataProvider } from "../data/fmp-provider.js";
 import { getDataAge, formatDuration } from "../utils/storage.js";
 import { DEFAULT_SCORING_CONFIG } from "../scoring/types.js";
 
@@ -34,6 +34,11 @@ export const runCommand = new Command("run")
   .option(
     "--no-market-data",
     "Skip fetching market data (faster)"
+  )
+  .option(
+    "--market-data-ttl <days>",
+    "Market data cache TTL in days (default: 30)",
+    "30"
   )
   .option("--json", "Output raw JSON")
   .action(async (options) => {
@@ -92,11 +97,21 @@ export const runCommand = new Command("run")
       console.log("🔍 Step 3: Analysis\n");
 
       // Create market data provider if enabled
-      const marketDataProvider = options.marketData
-        ? createFMPProvider()
-        : null;
-
-      if (!marketDataProvider) {
+      let marketDataProvider = null;
+      if (options.marketData) {
+        const apiKey = process.env.FMP_API_KEY;
+        if (!apiKey) {
+          console.error("❌ FMP_API_KEY environment variable is not set");
+          process.exit(1);
+        }
+        const ttlDays = parseInt(options.marketDataTtl, 10);
+        const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+        marketDataProvider = new FMPMarketDataProvider(apiKey, {
+          ttlMs,
+          maxEntries: 1000,
+        });
+        console.log(`   Market data cache TTL: ${ttlDays} days\n`);
+      } else {
         console.log("   Market data fetching disabled\n");
       }
 

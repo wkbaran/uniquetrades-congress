@@ -38,6 +38,7 @@ npm start -- analyze
 - `--no-fetch-trades` - Skip fetching fresh data, use cached
 - `-r, --refresh` - Force full refresh instead of incremental update (only when fetching)
 - `--no-market-data` - Skip fetching market data (faster, but no market cap scoring)
+- `--market-data-ttl <days>` - Market data cache TTL in days (default: 30)
 - `--json` - Output raw JSON instead of formatted text
 
 ### Fetch Trades
@@ -99,6 +100,24 @@ npm start -- fetch:committees
 
 **Storage:** Trade data is stored locally in `data/trades.json` with a timestamp, enabling fast incremental updates
 
+## Caching Strategy
+
+All data is cached locally in the `data/` directory to minimize API calls and speed up analysis:
+
+| Data Type | Cache File | TTL | Behavior |
+|-----------|-----------|-----|----------|
+| **Trade Data** | `trades.json` | ∞ | Incremental: Fetches only new trades since last update |
+| **Market Data** | `market-data-cache.json` | 30 days (configurable) | Per-symbol caching with expiration |
+| **Committee Data** | `committee-data.json` | 24 hours | Full refresh when expired |
+| **Legislators** | `legislators.json` | 24 hours | Full refresh when expired |
+| **Sectors/Industries** | `fmp-sectors.json`, `fmp-industries.json` | 7 days | Taxonomy data, rarely changes |
+
+**Customizing Market Data Cache:**
+```bash
+npm start -- analyze --market-data-ttl 7   # 7-day cache
+npm start -- analyze --market-data-ttl 90  # 90-day cache
+```
+
 ### Market Data (for scoring)
 **Source:** FMP REST API
 **Endpoint:** `GET /stable/profile?symbol={symbol}`
@@ -107,6 +126,9 @@ Fetched during analysis for each unique symbol in the trade data. Provides:
 - `marketCap` - Company market capitalization in dollars
 - `sector` - FMP sector classification (e.g., "Technology", "Healthcare")
 - `industry` - FMP industry classification (e.g., "Software - Application", "Banks - Diversified")
+- `averageVolume` - Average trading volume
+
+**Caching:** Market data is cached for 30 days by default (configurable with `--market-data-ttl`). Since scoring uses thresholds (micro/small/mid/large cap), not exact values, a 30-day cache is reasonable as companies rarely change categories within that timeframe.
 
 ### Committee Membership Data
 **Source:** GitHub raw files from [unitedstates/congress-legislators](https://github.com/unitedstates/congress-legislators)
