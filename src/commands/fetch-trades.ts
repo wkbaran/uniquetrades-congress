@@ -6,6 +6,8 @@ import { getDataAge, formatDuration } from "../utils/storage.js";
 export const fetchTradesCommand = new Command("fetch:trades")
   .description("Fetch latest congressional trades from FMP")
   .option("-f, --force", "Force fetch even if data is recent")
+  .option("--page <number>", "Page number (starts at 0)", "0")
+  .option("--limit <number>", "Number of trades per page", "100")
   .action(async (options) => {
     try {
       // Check if we have recent data
@@ -22,10 +24,13 @@ export const fetchTradesCommand = new Command("fetch:trades")
         }
       }
 
-      console.log("Fetching trades from FMP...\n");
+      const page = parseInt(options.page, 10);
+      const limit = parseInt(options.limit, 10);
+
+      console.log(`Fetching trades from FMP (page=${page}, limit=${limit})...\n`);
 
       const fmpClient = createFMPClient();
-      const data = await fetchTrades(fmpClient);
+      const data = await fetchTrades(fmpClient, page, limit);
 
       const senateStats = getTradeStats(data.senateTrades);
       const houseStats = getTradeStats(data.houseTrades);

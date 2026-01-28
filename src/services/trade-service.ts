@@ -7,12 +7,16 @@ const TRADES_FILE = "trades.json";
 /**
  * Fetch latest trades from FMP
  */
-export async function fetchTrades(fmpClient: FMPClient): Promise<TradeData> {
-  console.log("Fetching latest trades from FMP...");
+export async function fetchTrades(
+  fmpClient: FMPClient,
+  page = 0,
+  limit = 100
+): Promise<TradeData> {
+  console.log(`Fetching trades from FMP (page=${page}, limit=${limit})...`);
 
   const [senateTrades, houseTrades] = await Promise.all([
-    fmpClient.getSenateTrades(),
-    fmpClient.getHouseTrades(),
+    fmpClient.getSenateTrades(page, limit),
+    fmpClient.getHouseTrades(page, limit),
   ]);
 
   console.log(

@@ -21,6 +21,11 @@ export const analyzeCommand = new Command("analyze")
     "0"
   )
   .option(
+    "--type <type>",
+    "Filter by trade type: purchase, sale, or all",
+    "all"
+  )
+  .option(
     "--no-market-data",
     "Skip fetching market data (faster, but no market cap scoring)"
   )
@@ -50,7 +55,23 @@ export const analyzeCommand = new Command("analyze")
         console.warn("   Run 'fetch:committees' to enable committee relevance analysis.\n");
       }
 
-      console.log("Running analysis...\n");
+      // Filter by trade type if specified
+      const tradeType = (options.type || "all").toLowerCase();
+      const filterByType = (trades: typeof tradeData.senateTrades) => {
+        if (tradeType === "all") return trades;
+        return trades.filter((t) => {
+          const type = (t.type || "").toLowerCase();
+          if (tradeType === "purchase") return type.includes("purchase");
+          if (tradeType === "sale") return type.includes("sale");
+          return true;
+        });
+      };
+
+      const senateTrades = filterByType(tradeData.senateTrades);
+      const houseTrades = filterByType(tradeData.houseTrades);
+
+      const typeLabel = tradeType === "all" ? "" : ` (${tradeType}s only)`;
+      console.log(`Running analysis${typeLabel}...\n`);
 
       // Create market data provider if enabled
       const marketDataProvider = options.marketData
@@ -66,8 +87,8 @@ export const analyzeCommand = new Command("analyze")
       };
 
       const report = await analyzeTrades(
-        tradeData.senateTrades,
-        tradeData.houseTrades,
+        senateTrades,
+        houseTrades,
         committeeData,
         marketDataProvider,
         config
@@ -90,7 +111,10 @@ export const analyzeCommand = new Command("analyze")
       const lines: string[] = [];
       lines.push("");
       lines.push("=".repeat(60));
-      lines.push("UNIQUE TRADES ANALYSIS REPORT");
+      const reportTitle = tradeType === "all"
+        ? "UNIQUE TRADES ANALYSIS REPORT"
+        : `UNIQUE ${tradeType.toUpperCase()}S ANALYSIS REPORT`;
+      lines.push(reportTitle);
       lines.push("=".repeat(60));
       lines.push(`Generated: ${report.generatedAt}`);
       lines.push(`Total Trades Analyzed: ${report.totalTradesAnalyzed}`);
@@ -144,7 +168,8 @@ export const analyzeCommand = new Command("analyze")
       const reportsDir = path.join(process.cwd(), "formatted-reports");
       await fs.mkdir(reportsDir, { recursive: true });
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const filename = `analyze-${timestamp}.txt`;
+      const typeSuffix = tradeType === "all" ? "" : `-${tradeType}s`;
+      const filename = `analyze${typeSuffix}-${timestamp}.txt`;
       await fs.writeFile(path.join(reportsDir, filename), output);
       console.log(`\n📁 Saved to formatted-reports/${filename}`);
     } catch (error) {

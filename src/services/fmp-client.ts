@@ -55,15 +55,15 @@ export class FMPClient {
   /**
    * Fetch latest Senate trades
    */
-  async getSenateTrades(): Promise<FMPTrade[]> {
-    return this.fetch("/stable/senate-latest", FMPTradesResponseSchema);
+  async getSenateTrades(page = 0, limit = 100): Promise<FMPTrade[]> {
+    return this.fetch(`/stable/senate-latest?page=${page}&limit=${limit}`, FMPTradesResponseSchema);
   }
 
   /**
    * Fetch latest House trades
    */
-  async getHouseTrades(): Promise<FMPTrade[]> {
-    return this.fetch("/stable/house-latest", FMPTradesResponseSchema);
+  async getHouseTrades(page = 0, limit = 100): Promise<FMPTrade[]> {
+    return this.fetch(`/stable/house-latest?page=${page}&limit=${limit}`, FMPTradesResponseSchema);
   }
 
   /**
