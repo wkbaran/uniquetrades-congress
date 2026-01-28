@@ -64,6 +64,6 @@ export interface CacheConfig {
 }
 
 export const DEFAULT_CACHE_CONFIG: CacheConfig = {
-  ttlMs: 24 * 60 * 60 * 1000, // 24 hours
+  ttlMs: 30 * 24 * 60 * 60 * 1000, // 30 days
   maxEntries: 1000,
 };
