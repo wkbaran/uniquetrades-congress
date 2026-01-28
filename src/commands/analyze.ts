@@ -22,8 +22,8 @@ export const analyzeCommand = new Command("analyze")
   )
   .option(
     "--type <type>",
-    "Filter by trade type: purchase, sale, or all",
-    "all"
+    "Filter by trade type: purchase (includes exchange), sale, or all",
+    "purchase"
   )
   .option(
     "--no-market-data",
@@ -56,12 +56,15 @@ export const analyzeCommand = new Command("analyze")
       }
 
       // Filter by trade type if specified
-      const tradeType = (options.type || "all").toLowerCase();
+      const tradeType = (options.type || "purchase").toLowerCase();
       const filterByType = (trades: typeof tradeData.senateTrades) => {
         if (tradeType === "all") return trades;
         return trades.filter((t) => {
           const type = (t.type || "").toLowerCase();
-          if (tradeType === "purchase") return type.includes("purchase");
+          if (tradeType === "purchase") {
+            // Include purchases and exchanges (exchanges are similar to purchases)
+            return type.includes("purchase") || type.includes("exchange");
+          }
           if (tradeType === "sale") return type.includes("sale");
           return true;
         });
