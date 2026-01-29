@@ -148,7 +148,7 @@ export const runCommand = new Command("run")
         console.log(`\n📈 TOP ${Math.min(topN, filteredTrades.length)} TRADES:\n`);
 
         for (const analyzed of filteredTrades.slice(0, topN)) {
-          console.log(formatTradeReport(analyzed));
+          console.log(formatTradeReport(analyzed, committeeData));
           console.log("");
         }
       } else {

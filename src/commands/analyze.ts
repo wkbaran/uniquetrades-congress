@@ -174,7 +174,7 @@ export const analyzeCommand = new Command("analyze")
       lines.push(`\n📈 ${countLabel} TRADES (score >= ${minScore}):\n`);
 
       for (const analyzed of tradesToShow) {
-        lines.push(formatTradeReport(analyzed));
+        lines.push(formatTradeReport(analyzed, committeeData));
         lines.push("");
       }
 
