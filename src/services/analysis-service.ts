@@ -35,7 +35,6 @@ export interface AnalyzedTrade {
   chamber: "senate" | "house";
   trader: TraderInput;
   score: UniquenessResult;
-  committeeData?: CommitteeData | null;
 }
 
 export interface AnalysisReport {
@@ -204,7 +203,6 @@ export async function analyzeTrades(
       chamber,
       trader,
       score,
-      committeeData,
     });
   }
 
@@ -362,8 +360,8 @@ export function getCommitteeNames(
 // Report formatting
 // ============================================
 
-export function formatTradeReport(analyzed: AnalyzedTrade): string {
-  const { trade, chamber, trader, score, committeeData } = analyzed;
+export function formatTradeReport(analyzed: AnalyzedTrade, committeeData?: CommitteeData | null): string {
+  const { trade, chamber, trader, score } = analyzed;
 
   // Format party as (R), (D), or empty
   const partyLabel = trader.party
