@@ -47,6 +47,10 @@ export const analyzeCommand = new Command("analyze")
     "--json",
     "Output raw JSON instead of formatted text"
   )
+  .option(
+    "--since <date>",
+    "Only analyze trades from this date onwards (YYYY-MM-DD)"
+  )
   .action(async (options) => {
     try {
       // Fetch or load trade data
@@ -99,7 +103,7 @@ export const analyzeCommand = new Command("analyze")
       const houseTrades = filterByType(tradeData.houseTrades);
 
       const typeLabel = tradeType === "all" ? "" : ` (${tradeType}s only)`;
-      console.log(`Running analysis${typeLabel}...\n`);
+      console.log(`Running analysis${typeLabel} on full dataset for context...\n`);
 
       // Create market data provider if enabled
       let marketDataProvider = null;
@@ -132,8 +136,36 @@ export const analyzeCommand = new Command("analyze")
         config
       );
 
+      // Filter results by date if --since is provided (after analysis for proper context)
+      let scoredTrades = report.scoredTrades;
+      if (options.since) {
+        const sinceDate = new Date(options.since);
+        if (isNaN(sinceDate.getTime())) {
+          console.error(`❌ Invalid date format: ${options.since}. Use YYYY-MM-DD.`);
+          process.exit(1);
+        }
+
+        const sinceDateStr = sinceDate.toISOString().split('T')[0];
+        const beforeCount = scoredTrades.length;
+
+        scoredTrades = scoredTrades.filter((st) => {
+          const tradeDate = st.trade.transactionDate;
+          if (!tradeDate) return false;
+          return tradeDate >= sinceDateStr;
+        });
+
+        const afterCount = scoredTrades.length;
+        console.log(`\nFiltering results to trades since ${sinceDateStr}...`);
+        console.log(`  ${beforeCount} analyzed → ${afterCount} matching date filter\n`);
+      }
+
       if (options.json) {
-        console.log(JSON.stringify(report, null, 2));
+        const filteredReport = {
+          ...report,
+          scoredTrades,
+          totalTradesAnalyzed: scoredTrades.length,
+        };
+        console.log(JSON.stringify(filteredReport, null, 2));
         return;
       }
 
@@ -141,7 +173,7 @@ export const analyzeCommand = new Command("analyze")
       const minScore = parseInt(options.minScore, 10);
       const topN = parseInt(options.top, 10);
 
-      const filteredTrades = report.scoredTrades.filter(
+      const filteredTrades = scoredTrades.filter(
         (t) => t.score.overallScore >= minScore
       );
 
@@ -156,8 +188,12 @@ export const analyzeCommand = new Command("analyze")
       lines.push("=".repeat(60));
       lines.push(`Generated: ${report.generatedAt}`);
 
-      // Calculate date range from trades
-      const allDates = report.scoredTrades
+      if (options.since) {
+        lines.push(`Filtered to trades since: ${options.since}`);
+      }
+
+      // Calculate date range from filtered trades
+      const allDates = scoredTrades
         .map((t) => t.trade.transactionDate)
         .filter((d): d is string => !!d)
         .sort();
@@ -165,7 +201,7 @@ export const analyzeCommand = new Command("analyze")
         lines.push(`Date Range: ${allDates[0]} to ${allDates[allDates.length - 1]}`);
       }
 
-      lines.push(`Total Trades Analyzed: ${report.totalTradesAnalyzed}`);
+      lines.push(`Total Trades in Results: ${scoredTrades.length}`);
       lines.push(`Trades Scoring >= ${minScore}: ${filteredTrades.length}`);
       lines.push("");
 
@@ -178,10 +214,22 @@ export const analyzeCommand = new Command("analyze")
         lines.push("");
       }
 
+      // Filter summary sections by date too
+      const filterSummaryByDate = (trades: typeof scoredTrades) => {
+        if (!options.since) return trades;
+        const sinceDateStr = new Date(options.since).toISOString().split('T')[0];
+        return trades.filter((st) => {
+          const tradeDate = st.trade.transactionDate;
+          if (!tradeDate) return false;
+          return tradeDate >= sinceDateStr;
+        });
+      };
+
       // Rare stocks section
-      if (report.summary.byRarity.length > 0) {
+      const rareTrades = filterSummaryByDate(report.summary.byRarity);
+      if (rareTrades.length > 0) {
         lines.push("\n🔍 RARE STOCK TRADES (few congress trades):\n");
-        for (const analyzed of report.summary.byRarity.slice(0, 5)) {
+        for (const analyzed of rareTrades.slice(0, 5)) {
           const rarity = analyzed.score.explanation.rarity;
           lines.push(
             `   ${analyzed.trade.symbol}: ${analyzed.trade.firstName} ${analyzed.trade.lastName} - ${rarity?.category} (${rarity?.totalCongressTrades} total trades)`
@@ -190,9 +238,10 @@ export const analyzeCommand = new Command("analyze")
       }
 
       // Committee relevance section
-      if (report.summary.byCommitteeRelevance.length > 0) {
+      const committeeTrades = filterSummaryByDate(report.summary.byCommitteeRelevance);
+      if (committeeTrades.length > 0) {
         lines.push("\n⚠️  COMMITTEE-RELEVANT TRADES:\n");
-        for (const analyzed of report.summary.byCommitteeRelevance.slice(0, 5)) {
+        for (const analyzed of committeeTrades.slice(0, 5)) {
           const rel = analyzed.score.explanation.committeeRelevance;
           lines.push(
             `   ${analyzed.trade.symbol}: ${analyzed.trade.firstName} ${analyzed.trade.lastName}`
