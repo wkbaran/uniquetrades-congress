@@ -21,6 +21,21 @@ Create a `.env` file with your FMP API key:
 FMP_API_KEY=your_api_key_here
 ```
 
+### Global CLI Installation (Optional)
+
+To use the CLI without `npm start --`, install it globally:
+
+```bash
+npm link
+```
+
+Then you can run commands directly:
+```bash
+congress-trades analyze --since 2026-01-01
+congress-trades fetch:trades
+congress-trades report:sales
+```
+
 ## Commands
 
 ### Analyze Trades
@@ -31,10 +46,18 @@ The main command that fetches fresh trade data and scores purchases for uniquene
 npm start -- analyze
 ```
 
+**Analyze recent trades only:**
+```bash
+npm start -- analyze --since 2026-01-01
+```
+
+This analyzes the full dataset for accurate scoring but only displays trades from the specified date onwards.
+
 **Options:**
 - `--min-score <number>` - Minimum uniqueness score to show (default: 40)
 - `--top <number>` - Limit to top N results, 0 = all (default: 0)
 - `--type <type>` - Filter by trade type: `purchase` (default), `sale`, or `all`
+- `--since <date>` - Only show trades from this date onwards (YYYY-MM-DD). Note: Full dataset is still analyzed for accurate rarity scoring
 - `--no-fetch-trades` - Skip fetching fresh data, use cached
 - `-r, --refresh` - Force full refresh instead of incremental update (only when fetching)
 - `--no-market-data` - Skip fetching market data (faster, but no market cap scoring)
