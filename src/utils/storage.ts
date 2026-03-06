@@ -119,6 +119,31 @@ export async function getLatestReport(
   return matching || null;
 }
 
+const SEEN_TRADES_FILE = path.join(DATA_DIR, "seen-trades.json");
+
+/**
+ * Load the set of trade keys that have already been shown in reports
+ */
+export async function loadSeenTradeKeys(): Promise<Set<string>> {
+  try {
+    const content = await fs.readFile(SEEN_TRADES_FILE, "utf-8");
+    const keys = JSON.parse(content) as string[];
+    return new Set(keys);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Persist a set of seen trade keys, merging with any existing keys
+ */
+export async function saveSeenTradeKeys(newKeys: Set<string>): Promise<void> {
+  const existing = await loadSeenTradeKeys();
+  for (const key of newKeys) existing.add(key);
+  await ensureDir(DATA_DIR);
+  await fs.writeFile(SEEN_TRADES_FILE, JSON.stringify([...existing], null, 2), "utf-8");
+}
+
 /**
  * Format bytes to human readable
  */

@@ -1,13 +1,14 @@
 import { Command } from "commander";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { loadTrades, fetchTrades, getDefaultTargetDate } from "../services/trade-service.js";
+import { loadTrades, fetchTrades, getDefaultTargetDate, getTradeKey } from "../services/trade-service.js";
 import { loadCommitteeData } from "../services/committee-service.js";
 import { analyzeTrades, formatTradeReport, getCommitteeNames } from "../services/analysis-service.js";
 import { FMPMarketDataProvider } from "../data/fmp-provider.js";
 import { createFMPClient } from "../services/fmp-client.js";
 import type { ScoringConfig } from "../scoring/types.js";
 import { DEFAULT_SCORING_CONFIG } from "../scoring/types.js";
+import { loadSeenTradeKeys, saveSeenTradeKeys } from "../utils/storage.js";
 
 export const analyzeCommand = new Command("analyze")
   .description("Analyze trades and identify unique opportunities")
@@ -50,6 +51,10 @@ export const analyzeCommand = new Command("analyze")
   .option(
     "--since <date>",
     "Only analyze trades from this date onwards (YYYY-MM-DD)"
+  )
+  .option(
+    "--new-only",
+    "Only show trades not seen in a previous report (persists seen state in data/seen-trades.json)"
   )
   .action(async (options) => {
     try {
@@ -159,6 +164,17 @@ export const analyzeCommand = new Command("analyze")
         console.log(`  ${beforeCount} analyzed → ${afterCount} matching date filter\n`);
       }
 
+      // Filter to only unseen trades if --new-only
+      let seenKeys: Set<string> | null = null;
+      if (options.newOnly) {
+        seenKeys = await loadSeenTradeKeys();
+        const beforeCount = scoredTrades.length;
+        scoredTrades = scoredTrades.filter((st) => !seenKeys!.has(getTradeKey(st.trade)));
+        const afterCount = scoredTrades.length;
+        console.log(`Filtering to new trades only...`);
+        console.log(`  ${beforeCount} scored → ${afterCount} not previously seen\n`);
+      }
+
       if (options.json) {
         const filteredReport = {
           ...report,
@@ -190,6 +206,9 @@ export const analyzeCommand = new Command("analyze")
 
       if (options.since) {
         lines.push(`Filtered to trades since: ${options.since}`);
+      }
+      if (options.newOnly) {
+        lines.push(`Mode: New trades only (not seen in previous reports)`);
       }
 
       // Calculate date range from filtered trades
@@ -275,6 +294,13 @@ export const analyzeCommand = new Command("analyze")
       const filename = `analyze${typeSuffix}-${timestamp}.txt`;
       await fs.writeFile(path.join(reportsDir, filename), output);
       console.log(`\n📁 Saved to formatted-reports/${filename}`);
+
+      // Persist seen trade keys so --new-only skips them next time
+      if (options.newOnly) {
+        const shownKeys = new Set(scoredTrades.map((st) => getTradeKey(st.trade)));
+        await saveSeenTradeKeys(shownKeys);
+        console.log(`💾 Marked ${shownKeys.size} trade(s) as seen in data/seen-trades.json`);
+      }
     } catch (error) {
       console.error("❌ Analysis failed:", error);
       process.exit(1);

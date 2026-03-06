@@ -58,6 +58,7 @@ This analyzes the full dataset for accurate scoring but only displays trades fro
 - `--top <number>` - Limit to top N results, 0 = all (default: 0)
 - `--type <type>` - Filter by trade type: `purchase` (default), `sale`, or `all`
 - `--since <date>` - Only show trades from this date onwards (YYYY-MM-DD). Note: Full dataset is still analyzed for accurate rarity scoring
+- `--new-only` - Only show trades not seen in a previous report. Seen trade keys are persisted in `data/seen-trades.json` and accumulated across runs. Delete that file to reset. Note: Full dataset is still scored for accurate rarity scoring
 - `--no-fetch-trades` - Skip fetching fresh data, use cached
 - `-r, --refresh` - Force full refresh instead of incremental update (only when fetching)
 - `--no-market-data` - Skip fetching market data (faster, but no market cap scoring)
@@ -130,10 +131,22 @@ All data is cached locally in the `data/` directory to minimize API calls and sp
 | Data Type | Cache File | TTL | Behavior |
 |-----------|-----------|-----|----------|
 | **Trade Data** | `trades.json` | ∞ | Incremental: Fetches only new trades since last update |
+| **Seen Trades** | `seen-trades.json` | ∞ | Set of trade keys shown in `--new-only` reports; delete to reset |
 | **Market Data** | `market-data-cache.json` | 30 days (configurable) | Per-symbol caching with expiration |
 | **Committee Data** | `committee-data.json` | 24 hours | Full refresh when expired |
 | **Legislators** | `legislators.json` | 24 hours | Full refresh when expired |
 | **Sectors/Industries** | `fmp-sectors.json`, `fmp-industries.json` | 7 days | Taxonomy data, rarely changes |
+
+**Recommended weekly workflow:**
+```bash
+# Run once a week — fetches new disclosures, shows only trades not seen before
+congress-trades analyze --new-only
+```
+
+To start fresh (show all trades again on the next run):
+```bash
+rm data/seen-trades.json
+```
 
 **Customizing Market Data Cache:**
 ```bash

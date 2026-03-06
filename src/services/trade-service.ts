@@ -16,7 +16,7 @@ export function getDefaultTargetDate(): Date {
 /**
  * Generate a unique key for a trade to detect duplicates
  */
-function getTradeKey(trade: FMPTrade): string {
+export function getTradeKey(trade: FMPTrade): string {
   return [
     trade.firstName || "",
     trade.lastName || "",
