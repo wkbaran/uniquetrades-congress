@@ -157,6 +157,14 @@ export const reportHtmlCommand = new Command("report:html")
         .sort((a, b) => (b.transactionDate ?? "").localeCompare(a.transactionDate ?? ""))
         .map((trade) => ({ trade, party: resolveParty(trade) }));
 
+      const purchaseTrades = allTrades
+        .filter((t) => {
+          const type = (t.type || "").toLowerCase();
+          return type.includes("purchase") || type.includes("exchange");
+        })
+        .sort((a, b) => (b.transactionDate ?? "").localeCompare(a.transactionDate ?? ""))
+        .map((trade) => ({ trade, party: resolveParty(trade) }));
+
       // ── Build exchange map for TradingView links ─────────────────────────
       const exchangeMap = await loadExchangeMap();
 
@@ -176,6 +184,7 @@ export const reportHtmlCommand = new Command("report:html")
       const html = buildHtmlReport({
         report,
         salesTrades,
+        purchaseTrades,
         dateLabel: label,
         indexUrl: "index.html",
         exchangeMap,

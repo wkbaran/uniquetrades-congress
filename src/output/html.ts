@@ -562,6 +562,8 @@ export interface HtmlReportOptions {
   report: AnalysisReport;
   /** All sales trades (sorted by date descending) */
   salesTrades: Array<{ trade: FMPTrade; party: string | undefined }>;
+  /** All purchase trades (sorted by date descending) */
+  purchaseTrades: Array<{ trade: FMPTrade; party: string | undefined }>;
   /** Title date label, e.g. "Week of April 13, 2026" */
   dateLabel: string;
   /** Link back to the index page */
@@ -571,7 +573,7 @@ export interface HtmlReportOptions {
 }
 
 export function buildHtmlReport(opts: HtmlReportOptions): string {
-  const { report, salesTrades, dateLabel, indexUrl, exchangeMap = new Map() } = opts;
+  const { report, salesTrades, purchaseTrades, dateLabel, indexUrl, exchangeMap = new Map() } = opts;
 
   // Top purchases (score >= 40, sorted by score desc)
   const topPurchases = [...report.scoredTrades]
@@ -629,7 +631,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
   <div class="stats-bar">
     <span class="stat-item"><strong>${report.totalTradesAnalyzed}</strong> trades analyzed</span>
     <span class="stat-sep">·</span>
-    <span class="stat-item"><strong>${topPurchases.length}</strong> notable purchases</span>
+    <span class="stat-item"><strong>${purchaseTrades.length}</strong> purchases</span>
     <span class="stat-sep">·</span>
     <span class="stat-item"><strong>${salesTrades.length}</strong> sales</span>
     <span class="stat-sep">·</span>
@@ -658,6 +660,32 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     </div>
     <div class="card-grid">
       ${committeeRelevant.map((t) => renderTradeCard(t, exchangeMap)).join("\n      ")}
+    </div>
+  </section>
+  ` : ""}
+
+  <!-- Recent Purchases -->
+  ${purchaseTrades.length > 0 ? `
+  <section class="section">
+    <div class="section-header">
+      <h2 class="section-title">Recent Purchases</h2>
+      <span class="section-count">${purchaseTrades.length} trades</span>
+    </div>
+    <div class="sales-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Symbol</th>
+            <th>Amount</th>
+            <th>Trader</th>
+            <th>Asset</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n          ")}
+        </tbody>
+      </table>
     </div>
   </section>
   ` : ""}
