@@ -1,5 +1,12 @@
 import type { AnalysisReport, AnalyzedTrade } from "../services/analysis-service.js";
 import type { FMPTrade } from "../types/index.js";
+import { SENATE_COMMITTEE_TAXONOMY, HOUSE_COMMITTEE_TAXONOMY } from "../data/committee-sector-taxonomy.js";
+
+const COMMITTEE_NAMES = new Map<string, string>(
+  [...SENATE_COMMITTEE_TAXONOMY, ...HOUSE_COMMITTEE_TAXONOMY].map(
+    (c) => [c.committeeId, c.committeeName]
+  )
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TradingView link helpers
@@ -138,7 +145,15 @@ function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, strin
     const sector = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
     details.push(`<li class="detail-warning">Committee oversight: ${esc(sector)}</li>`);
     if (rel.overlappingCommittees.length) {
-      details.push(`<li class="detail-warning">Committees: ${esc(rel.overlappingCommittees.join(", "))}</li>`);
+      const abbrs = rel.overlappingCommittees
+        .map((id) => {
+          const fullName = COMMITTEE_NAMES.get(id);
+          return fullName
+            ? `<abbr class="committee-abbr" title="${esc(fullName)}">${esc(id)}</abbr>`
+            : esc(id);
+        })
+        .join(", ");
+      details.push(`<li class="detail-warning">Committees: ${abbrs}</li>`);
     }
   }
   if (score.flags.isDerivative && score.explanation.derivative) {
@@ -455,6 +470,11 @@ const CSS = `
   .trade-details li { padding-left: 0.75rem; position: relative; }
   .trade-details li::before { content: "·"; position: absolute; left: 0; }
   .detail-warning { color: var(--red) !important; }
+  abbr.committee-abbr {
+    text-decoration: underline dotted var(--red);
+    cursor: help;
+    font-style: normal;
+  }
 
   /* Sales table */
   .sales-table-wrap { overflow-x: auto; }
