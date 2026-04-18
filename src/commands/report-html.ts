@@ -7,7 +7,7 @@ import { analyzeTrades } from "../services/analysis-service.js";
 import type { AnalysisReport } from "../services/analysis-service.js";
 import { createFMPProvider } from "../data/fmp-provider.js";
 import { createFMPClient } from "../services/fmp-client.js";
-import { buildHtmlReport } from "../output/html.js";
+import { buildHtmlReport, buildPartyPage } from "../output/html.js";
 import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest } from "../output/index-page.js";
 import { publishOutput } from "../publish.js";
 import { loadData, getLatestReport } from "../utils/storage.js";
@@ -192,6 +192,36 @@ export const reportHtmlCommand = new Command("report:html")
 
       await fs.writeFile(path.join(webDir, reportFile), html, "utf-8");
       console.log(`   Saved → ${path.join(webDir, reportFile)}`);
+
+      // ── Party pages ──────────────────────────────────────────────────────
+      const allPartyTrades = [...purchaseTrades, ...salesTrades]
+        .sort((a, b) => (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? ""));
+
+      const partyGroups: Array<{ key: string; label: string; file: string }> = [
+        { key: "r", label: "Republican", file: `party-republican-${dateStr}.html` },
+        { key: "d", label: "Democrat", file: `party-democrat-${dateStr}.html` },
+        { key: "i", label: "Independent", file: `party-independent-${dateStr}.html` },
+      ];
+
+      for (const pg of partyGroups) {
+        const filtered = allPartyTrades.filter(({ party }) => {
+          const p = (party ?? "").toLowerCase();
+          if (pg.key === "r") return p.startsWith("r");
+          if (pg.key === "d") return p.startsWith("d");
+          return p && !p.startsWith("r") && !p.startsWith("d");
+        });
+        if (!filtered.length) continue;
+        const partyHtml = buildPartyPage({
+          partyLabel: pg.label,
+          trades: filtered,
+          dateLabel: label,
+          reportUrl: reportFile,
+          indexUrl: "index.html",
+          exchangeMap,
+        });
+        await fs.writeFile(path.join(webDir, pg.file), partyHtml, "utf-8");
+        console.log(`   ${pg.label} → ${pg.file} (${filtered.length} trades)`);
+      }
 
       // ── Update manifest + rebuild index ──────────────────────────────────
       const manifest = await upsertManifest(webDir, {
