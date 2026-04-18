@@ -172,9 +172,15 @@ export const reportHtmlCommand = new Command("report:html")
       const now = new Date();
       const dateStr = now.toISOString().split("T")[0];
       const label = `Week of ${weekLabel(now)}`;
-      const reportFile = `report-${dateStr}.html`;
 
-      console.log(`\n📄 Building HTML report: ${reportFile}`);
+      // All per-run files go into a dated subdirectory
+      const dateDir = path.join(webDir, dateStr);
+      await fs.mkdir(dateDir, { recursive: true });
+
+      const reportFile = "report.html";
+      const reportRelPath = `${dateStr}/report.html`; // relative to webDir, used in manifest
+
+      console.log(`\n📄 Building HTML report: ${dateStr}/report.html`);
 
       const topSymbols = report.summary.topByScore
         .slice(0, 8)
@@ -186,21 +192,21 @@ export const reportHtmlCommand = new Command("report:html")
         salesTrades,
         purchaseTrades,
         dateLabel: label,
-        indexUrl: "index.html",
+        indexUrl: "../index.html",
         exchangeMap,
       });
 
-      await fs.writeFile(path.join(webDir, reportFile), html, "utf-8");
-      console.log(`   Saved → ${path.join(webDir, reportFile)}`);
+      await fs.writeFile(path.join(dateDir, reportFile), html, "utf-8");
+      console.log(`   Saved → ${path.join(dateDir, reportFile)}`);
 
       // ── Party pages ──────────────────────────────────────────────────────
       const allPartyTrades = [...purchaseTrades, ...salesTrades]
         .sort((a, b) => (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? ""));
 
       const partyGroups: Array<{ key: string; label: string; file: string }> = [
-        { key: "r", label: "Republican", file: `party-republican-${dateStr}.html` },
-        { key: "d", label: "Democrat", file: `party-democrat-${dateStr}.html` },
-        { key: "i", label: "Independent", file: `party-independent-${dateStr}.html` },
+        { key: "r", label: "Republican", file: "party-republican.html" },
+        { key: "d", label: "Democrat", file: "party-democrat.html" },
+        { key: "i", label: "Independent", file: "party-independent.html" },
       ];
 
       for (const pg of partyGroups) {
@@ -216,10 +222,10 @@ export const reportHtmlCommand = new Command("report:html")
           trades: filtered,
           dateLabel: label,
           reportUrl: reportFile,
-          indexUrl: "index.html",
+          indexUrl: "../index.html",
           exchangeMap,
         });
-        await fs.writeFile(path.join(webDir, pg.file), partyHtml, "utf-8");
+        await fs.writeFile(path.join(dateDir, pg.file), partyHtml, "utf-8");
         console.log(`   ${pg.label} → ${pg.file} (${filtered.length} trades)`);
       }
 
@@ -246,7 +252,7 @@ export const reportHtmlCommand = new Command("report:html")
 
       let memberCount = 0;
       for (const [key, member] of memberMap) {
-        const memberFile = `member-${key}-${dateStr}.html`;
+        const memberFile = `member-${key}.html`;
         const memberHtml = buildMemberPage({
           memberName: member.name,
           chamber: member.chamber,
@@ -256,10 +262,10 @@ export const reportHtmlCommand = new Command("report:html")
           ),
           dateLabel: label,
           reportUrl: reportFile,
-          indexUrl: "index.html",
+          indexUrl: "../index.html",
           exchangeMap,
         });
-        await fs.writeFile(path.join(webDir, memberFile), memberHtml, "utf-8");
+        await fs.writeFile(path.join(dateDir, memberFile), memberHtml, "utf-8");
         memberCount++;
       }
       console.log(`   Members → ${memberCount} pages generated`);
@@ -268,7 +274,7 @@ export const reportHtmlCommand = new Command("report:html")
       const manifest = await upsertManifest(webDir, {
         date: dateStr,
         dateLabel: label,
-        file: reportFile,
+        file: reportRelPath,
         totalTrades: report.totalTradesAnalyzed,
         topSymbols,
       });
