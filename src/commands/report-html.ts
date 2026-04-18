@@ -4,19 +4,20 @@ import * as path from "path";
 import { loadTrades, fetchTrades, getDefaultTargetDate } from "../services/trade-service.js";
 import { loadCommitteeData, buildPartyMap, findMemberByName, getMemberParty } from "../services/committee-service.js";
 import { analyzeTrades } from "../services/analysis-service.js";
+import type { AnalysisReport } from "../services/analysis-service.js";
 import { createFMPProvider } from "../data/fmp-provider.js";
 import { createFMPClient } from "../services/fmp-client.js";
 import { buildHtmlReport } from "../output/html.js";
-import { buildIndexPage, loadManifest, upsertManifest } from "../output/index-page.js";
+import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest } from "../output/index-page.js";
 import { publishOutput } from "../publish.js";
+import { loadData, getLatestReport } from "../utils/storage.js";
 import type { FMPTrade } from "../types/index.js";
 
 const DEFAULT_WEB_DIR = "output/web";
 
 function weekLabel(date: Date): string {
-  // Find the Monday of the current week
   const d = new Date(date);
-  const day = d.getDay(); // 0=Sun, 1=Mon ...
+  const day = d.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + diff);
   return d.toLocaleDateString("en-US", {
@@ -26,67 +27,46 @@ function weekLabel(date: Date): string {
   });
 }
 
+
 export const reportHtmlCommand = new Command("report:html")
   .description("Generate a weekly HTML report and optionally publish to AWS S3")
-  .option(
-    "--no-fetch-trades",
-    "Use cached trade data instead of fetching fresh"
-  )
-  .option(
-    "--no-market-data",
-    "Skip market data fetching (faster, no market cap scores)"
-  )
+  .option("--no-fetch-trades", "Use cached trade data instead of fetching fresh")
+  .option("--no-market-data", "Skip market data fetching (faster, no market cap scores)")
   .option(
     "--out <dir>",
     `Output directory for HTML files (default: ${DEFAULT_WEB_DIR})`,
     DEFAULT_WEB_DIR
   )
-  .option(
-    "--publish",
-    "Sync output/web to S3 and invalidate CloudFront after generating"
-  )
-  .option(
-    "--bucket <name>",
-    "S3 bucket name (or set S3_BUCKET env var)"
-  )
-  .option(
-    "--region <region>",
-    "AWS region (default: us-east-1 or AWS_REGION env var)"
-  )
-  .option(
-    "--prefix <prefix>",
-    "S3 key prefix (optional)"
-  )
+  .option("--render-only", "Re-render HTML from the last saved analysis without re-fetching or re-analyzing")
+  .option("--rebuild-index", "Rebuild index.html from the manifest (prunes deleted reports) without generating a new report")
+  .option("--publish", "Sync output/web to S3 and invalidate CloudFront after generating")
+  .option("--bucket <name>", "S3 bucket name (or set S3_BUCKET env var)")
+  .option("--region <region>", "AWS region (default: us-east-1 or AWS_REGION env var)")
+  .option("--prefix <prefix>", "S3 key prefix (optional)")
   .action(async (options) => {
     try {
       const webDir = path.resolve(process.cwd(), options.out as string);
       await fs.mkdir(webDir, { recursive: true });
 
-      // ── 1. Fetch or load trades ──────────────────────────────────────────
-      let tradeData;
-      if (options.fetchTrades) {
-        console.log("📥 Fetching fresh trade data...");
-        const fmpClient = createFMPClient();
-        const targetDate = getDefaultTargetDate();
-        tradeData = await fetchTrades(fmpClient, targetDate);
-        console.log("");
-      } else {
-        console.log("Using cached trade data (omit --no-fetch-trades to refresh)");
-        tradeData = await loadTrades();
+      // ── Rebuild-index-only shortcut ──────────────────────────────────────
+      if (options.rebuildIndex) {
+        console.log("Rebuilding index from manifest...");
+        const manifest = await rebuildManifest(webDir);
+        const indexHtml = buildIndexPage(manifest);
+        await fs.writeFile(path.join(webDir, "index.html"), indexHtml, "utf-8");
+        console.log(`✅ index.html rebuilt (${manifest.length} report${manifest.length !== 1 ? "s" : ""})`);
+        if (options.publish) {
+          await publishOutput({ localDir: webDir, bucket: options.bucket, region: options.region, prefix: options.prefix });
+        }
+        return;
       }
 
-      if (!tradeData) {
-        console.error("❌ No trade data found. Run without --no-fetch-trades to fetch.");
-        process.exit(1);
-      }
-
-      // ── 2. Load committee data ───────────────────────────────────────────
+      // ── Load committee data (needed in both paths) ───────────────────────
       const committeeData = await loadCommitteeData();
       if (!committeeData) {
         console.warn("⚠️  No committee data — run fetch:committees for committee analysis.");
       }
 
-      // ── 3. Build party map for sales section ────────────────────────────
       const partyMap = committeeData?.legislators
         ? buildPartyMap(committeeData.legislators)
         : null;
@@ -102,34 +82,70 @@ export const reportHtmlCommand = new Command("report:html")
         return id ? getMemberParty(id, partyMap) ?? undefined : undefined;
       }
 
-      // ── 4. Run analysis on all purchases ────────────────────────────────
-      const marketDataProvider = options.marketData ? createFMPProvider() : null;
-      if (!marketDataProvider) {
-        console.log("Market data disabled (omit --no-market-data to enable)");
+      let report: AnalysisReport;
+
+      // ── Render-only path ─────────────────────────────────────────────────
+      if (options.renderOnly) {
+        console.log("Render-only mode: loading last saved analysis...");
+        const filename = await getLatestReport("unique-trades");
+        if (!filename) {
+          console.error("❌ No saved analysis found. Run report:html (without --render-only) first.");
+          process.exit(1);
+        }
+        const stored = await loadData<AnalysisReport>(filename, "reports");
+        if (!stored?.data) {
+          console.error(`❌ Could not load analysis from ${filename}.`);
+          process.exit(1);
+        }
+        report = stored.data;
+        console.log(`   Loaded ${filename} (${new Date(stored.fetchedAt).toLocaleString()})`);
+      } else {
+        // ── Full analysis path ─────────────────────────────────────────────
+        let tradeData;
+        if (options.fetchTrades) {
+          console.log("📥 Fetching fresh trade data...");
+          const fmpClient = createFMPClient();
+          const targetDate = getDefaultTargetDate();
+          tradeData = await fetchTrades(fmpClient, targetDate);
+          console.log("");
+        } else {
+          console.log("Using cached trade data (omit --no-fetch-trades to refresh)");
+          tradeData = await loadTrades();
+        }
+
+        if (!tradeData) {
+          console.error("❌ No trade data found. Run without --no-fetch-trades to fetch.");
+          process.exit(1);
+        }
+
+        const marketDataProvider = options.marketData ? createFMPProvider() : null;
+        if (!marketDataProvider) {
+          console.log("Market data disabled (omit --no-market-data to enable)");
+        }
+
+        console.log("\nRunning analysis...");
+        report = await analyzeTrades(
+          tradeData.senateTrades,
+          tradeData.houseTrades,
+          committeeData,
+          marketDataProvider
+        );
       }
 
-      console.log("\nRunning analysis...");
-      const report = await analyzeTrades(
-        tradeData.senateTrades,
-        tradeData.houseTrades,
-        committeeData,
-        marketDataProvider
-      );
-
-      // ── 5. Build sales list ──────────────────────────────────────────────
-      const allTrades = [
-        ...tradeData.senateTrades,
-        ...tradeData.houseTrades,
-      ];
+      // ── Load trade data for sales section ───────────────────────────────
+      const tradeData = await loadTrades();
+      const allTrades = tradeData
+        ? [...tradeData.senateTrades, ...tradeData.houseTrades]
+        : [];
 
       const salesTrades = allTrades
         .filter((t) => (t.type || "").toLowerCase().includes("sale"))
         .sort((a, b) => (b.transactionDate ?? "").localeCompare(a.transactionDate ?? ""))
         .map((trade) => ({ trade, party: resolveParty(trade) }));
 
-      // ── 6. Generate report HTML ──────────────────────────────────────────
+      // ── Generate report HTML ─────────────────────────────────────────────
       const now = new Date();
-      const dateStr = now.toISOString().split("T")[0]; // e.g. "2026-04-18"
+      const dateStr = now.toISOString().split("T")[0];
       const label = `Week of ${weekLabel(now)}`;
       const reportFile = `report-${dateStr}.html`;
 
@@ -150,8 +166,8 @@ export const reportHtmlCommand = new Command("report:html")
       await fs.writeFile(path.join(webDir, reportFile), html, "utf-8");
       console.log(`   Saved → ${path.join(webDir, reportFile)}`);
 
-      // ── 7. Update manifest + rebuild index ──────────────────────────────
-      await upsertManifest(webDir, {
+      // ── Update manifest + rebuild index ──────────────────────────────────
+      const manifest = await upsertManifest(webDir, {
         date: dateStr,
         dateLabel: label,
         file: reportFile,
@@ -159,12 +175,11 @@ export const reportHtmlCommand = new Command("report:html")
         topSymbols,
       });
 
-      const manifest = await loadManifest(webDir);
       const indexHtml = buildIndexPage(manifest);
       await fs.writeFile(path.join(webDir, "index.html"), indexHtml, "utf-8");
       console.log(`   Index → ${path.join(webDir, "index.html")} (${manifest.length} report${manifest.length !== 1 ? "s" : ""})`);
 
-      // ── 8. Publish to S3 ────────────────────────────────────────────────
+      // ── Publish to S3 ────────────────────────────────────────────────────
       if (options.publish) {
         console.log("\n🚀 Publishing to S3...");
         await publishOutput({

@@ -2,11 +2,11 @@ import * as fs from "fs/promises";
 import * as path from "path";
 
 export interface ReportManifestEntry {
-  date: string;           // ISO date string, e.g. "2026-04-18"
-  dateLabel: string;      // Human-readable, e.g. "Week of April 13, 2026"
-  file: string;           // Relative filename, e.g. "report-2026-04-18.html"
+  date: string;        // ISO date string, e.g. "2026-04-18"
+  dateLabel: string;   // Human-readable, e.g. "Week of April 13, 2026"
+  file: string;        // Relative filename, e.g. "report-2026-04-18.html"
   totalTrades: number;
-  topSymbols: string[];   // Up to 6 top symbols as preview
+  topSymbols: string[]; // Up to 8 top symbols as preview
 }
 
 const MANIFEST_FILE = "manifest.json";
@@ -25,23 +25,65 @@ export async function loadManifest(webDir: string): Promise<ReportManifestEntry[
   }
 }
 
+async function writeManifest(webDir: string, entries: ReportManifestEntry[]): Promise<void> {
+  await fs.writeFile(
+    path.join(webDir, MANIFEST_FILE),
+    JSON.stringify(entries, null, 2)
+  );
+}
+
+/**
+ * Remove manifest entries whose HTML files no longer exist on disk.
+ */
+async function pruneManifest(
+  webDir: string,
+  manifest: ReportManifestEntry[]
+): Promise<ReportManifestEntry[]> {
+  const live: ReportManifestEntry[] = [];
+  for (const entry of manifest) {
+    try {
+      await fs.access(path.join(webDir, entry.file));
+      live.push(entry);
+    } catch {
+      console.log(`   Pruned stale manifest entry: ${entry.file}`);
+    }
+  }
+  return live;
+}
+
+/**
+ * Insert or update a manifest entry, prune deleted files, sort newest first.
+ * Returns the updated manifest.
+ */
 export async function upsertManifest(
   webDir: string,
   entry: ReportManifestEntry
-): Promise<void> {
-  const manifest = await loadManifest(webDir);
+): Promise<ReportManifestEntry[]> {
+  let manifest = await loadManifest(webDir);
+
+  // Upsert
   const idx = manifest.findIndex((e) => e.date === entry.date);
-  if (idx >= 0) {
-    manifest[idx] = entry;
-  } else {
-    manifest.unshift(entry);
-  }
-  // Keep sorted newest first
+  if (idx >= 0) manifest[idx] = entry;
+  else manifest.unshift(entry);
+
+  // Prune then sort
+  manifest = await pruneManifest(webDir, manifest);
   manifest.sort((a, b) => b.date.localeCompare(a.date));
-  await fs.writeFile(
-    path.join(webDir, MANIFEST_FILE),
-    JSON.stringify(manifest, null, 2)
-  );
+
+  await writeManifest(webDir, manifest);
+  return manifest;
+}
+
+/**
+ * Rebuild the manifest by scanning for existing report HTML files.
+ * Removes entries whose files are gone; keeps metadata for those that remain.
+ */
+export async function rebuildManifest(webDir: string): Promise<ReportManifestEntry[]> {
+  const manifest = await loadManifest(webDir);
+  const pruned = await pruneManifest(webDir, manifest);
+  pruned.sort((a, b) => b.date.localeCompare(a.date));
+  await writeManifest(webDir, pruned);
+  return pruned;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -114,16 +156,16 @@ const INDEX_JS = `
   const root = document.documentElement;
   const btn = document.getElementById('theme-btn');
   const saved = localStorage.getItem('congress-theme');
-  if (saved) root.setAttribute('data-theme', saved);
+  if (saved === 'light') root.setAttribute('data-theme', 'light');
   function updateLabel() {
     const current = root.getAttribute('data-theme');
-    if (btn) btn.textContent = current === 'light' ? '🌙 Dark' : '☀️ Light';
+    if (btn) btn.textContent = current === 'light' ? '\u{1F319} Dark' : '\u2600\uFE0F Light';
   }
   updateLabel();
   if (btn) {
     btn.addEventListener('click', function () {
       const current = root.getAttribute('data-theme');
-      const next = current === 'light' ? '' : 'light';
+      const next = current === 'light' ? 'dark' : 'light';
       root.setAttribute('data-theme', next);
       localStorage.setItem('congress-theme', next);
       updateLabel();
@@ -158,18 +200,18 @@ export function buildIndexPage(entries: ReportManifestEntry[]): string {
         <div class="report-count">${e.totalTrades} trades</div>
         ${chips ? `<div class="report-chips">${chips}</div>` : ""}
       </div>
-      <span class="report-link"><a href="${escHtml(e.file)}">View report →</a></span>
+      <span class="report-link"><a href="${escHtml(e.file)}">View report \u2192</a></span>
     </div>`;
   });
 
   const emptyMsg = `<p style="color:var(--muted);font-size:0.88rem;">No reports yet. Run <code>congress-trades report:html</code> to generate the first one.</p>`;
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Congress Trades — Report Archive</title>
+  <title>Congress Trades \u2014 Report Archive</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
   <style>${INDEX_CSS}</style>
@@ -181,7 +223,7 @@ export function buildIndexPage(entries: ReportManifestEntry[]): string {
     <div class="site-title">Congress Trades</div>
     <div class="site-subtitle">Weekly analysis of unique congressional stock trades</div>
   </div>
-  <button class="theme-btn" id="theme-btn">☀️ Light</button>
+  <button class="theme-btn" id="theme-btn">\u2600\uFE0F Light</button>
 </header>
 
 <main>
