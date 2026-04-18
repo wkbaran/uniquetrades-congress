@@ -7,7 +7,7 @@ import { analyzeTrades } from "../services/analysis-service.js";
 import type { AnalysisReport } from "../services/analysis-service.js";
 import { createFMPProvider } from "../data/fmp-provider.js";
 import { createFMPClient } from "../services/fmp-client.js";
-import { buildHtmlReport, buildPartyPage } from "../output/html.js";
+import { buildHtmlReport, buildPartyPage, buildMemberPage } from "../output/html.js";
 import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest } from "../output/index-page.js";
 import { publishOutput } from "../publish.js";
 import { loadData, getLatestReport } from "../utils/storage.js";
@@ -222,6 +222,47 @@ export const reportHtmlCommand = new Command("report:html")
         await fs.writeFile(path.join(webDir, pg.file), partyHtml, "utf-8");
         console.log(`   ${pg.label} → ${pg.file} (${filtered.length} trades)`);
       }
+
+      // ── Member pages ──────────────────────────────────────────────────────
+      type MemberKey = string;
+      const memberMap = new Map<MemberKey, {
+        name: string; chamber: string; party: string | undefined;
+        trades: Array<{ trade: FMPTrade; party: string | undefined }>;
+      }>();
+
+      for (const item of allPartyTrades) {
+        const { trade } = item;
+        if (!trade.firstName && !trade.lastName) continue;
+        const name = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
+        const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        if (!memberMap.has(key)) {
+          const chamber = report.scoredTrades.find(
+            (t) => `${t.trade.firstName ?? ""} ${t.trade.lastName ?? ""}`.trim() === name
+          )?.chamber === "senate" ? "Sen." : "Rep.";
+          memberMap.set(key, { name, chamber, party: item.party, trades: [] });
+        }
+        memberMap.get(key)!.trades.push(item);
+      }
+
+      let memberCount = 0;
+      for (const [key, member] of memberMap) {
+        const memberFile = `member-${key}-${dateStr}.html`;
+        const memberHtml = buildMemberPage({
+          memberName: member.name,
+          chamber: member.chamber,
+          party: member.party,
+          trades: member.trades.sort((a, b) =>
+            (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? "")
+          ),
+          dateLabel: label,
+          reportUrl: reportFile,
+          indexUrl: "index.html",
+          exchangeMap,
+        });
+        await fs.writeFile(path.join(webDir, memberFile), memberHtml, "utf-8");
+        memberCount++;
+      }
+      console.log(`   Members → ${memberCount} pages generated`);
 
       // ── Update manifest + rebuild index ──────────────────────────────────
       const manifest = await upsertManifest(webDir, {
