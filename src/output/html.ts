@@ -516,11 +516,38 @@ const CSS = `
     margin-top: 2rem;
   }
 
+  /* Tabs */
+  .tab-bar {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 2px solid var(--border);
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .tab-btn {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    padding: 0.55rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
   /* Responsive */
   @media (max-width: 600px) {
     .site-header { flex-direction: column; align-items: flex-start; }
     .card-grid { grid-template-columns: 1fr; }
     .stats-bar { flex-direction: column; gap: 0.4rem; }
+    .tab-btn { padding: 0.45rem 0.65rem; font-size: 0.78rem; }
   }
 `;
 
@@ -530,27 +557,42 @@ const CSS = `
 
 const JS = `
 (function () {
-  const root = document.documentElement;
-  const btn = document.getElementById('theme-btn');
-  // Restore saved preference; default is 'dark' (set on <html>)
-  const saved = localStorage.getItem('congress-theme');
+  var root = document.documentElement;
+  var btn = document.getElementById('theme-btn');
+  var saved = (function(){ try { return localStorage.getItem('congress-theme'); } catch(e){ return null; } })();
   if (saved === 'light') root.setAttribute('data-theme', 'light');
 
   function updateLabel() {
-    const current = root.getAttribute('data-theme');
+    var current = root.getAttribute('data-theme');
     if (btn) btn.textContent = current === 'light' ? '\u{1F319} Dark' : '\u2600\uFE0F Light';
   }
   updateLabel();
 
   if (btn) {
     btn.addEventListener('click', function () {
-      const current = root.getAttribute('data-theme');
-      const next = current === 'light' ? 'dark' : 'light';
+      var current = root.getAttribute('data-theme');
+      var next = current === 'light' ? 'dark' : 'light';
       root.setAttribute('data-theme', next);
-      localStorage.setItem('congress-theme', next);
+      try { localStorage.setItem('congress-theme', next); } catch(e) {}
       updateLabel();
     });
   }
+
+  // Tab switching
+  var tabBtns = document.querySelectorAll('.tab-btn');
+  var tabPanels = document.querySelectorAll('.tab-panel');
+  function activateTab(id) {
+    tabBtns.forEach(function(b) { b.classList.toggle('active', b.dataset.tab === id); });
+    tabPanels.forEach(function(p) { p.classList.toggle('active', p.id === id); });
+    try { localStorage.setItem('congress-tab', id); } catch(e) {}
+  }
+  tabBtns.forEach(function(b) {
+    b.addEventListener('click', function() { activateTab(b.dataset.tab); });
+  });
+  // Restore last tab or default to first
+  var savedTab = (function(){ try { return localStorage.getItem('congress-tab'); } catch(e){ return null; } })();
+  var firstTab = tabBtns.length ? tabBtns[0].dataset.tab : null;
+  activateTab(savedTab && document.getElementById(savedTab) ? savedTab : firstTab);
 })();
 `;
 
@@ -640,81 +682,77 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     <span class="stat-item">Generated ${new Date(report.generatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
   </div>
 
-  <!-- Top Purchases -->
-  <section class="section">
-    <div class="section-header">
-      <h2 class="section-title">Top Purchases by Uniqueness Score</h2>
-      <span class="section-count">${topPurchases.length} trades</span>
-    </div>
-    <div class="card-grid">
-      ${topPurchases.map((t) => renderTradeCard(t, exchangeMap)).join("\n      ")}
-    </div>
-  </section>
+  <!-- Tab bar -->
+  <div class="tab-bar" role="tablist">
+    <button class="tab-btn" data-tab="tab-top" role="tab">Top Purchases (${topPurchases.length})</button>
+    ${committeeRelevant.length > 0 ? `<button class="tab-btn" data-tab="tab-committee" role="tab">Committee-Relevant (${committeeRelevant.length})</button>` : ""}
+    <button class="tab-btn" data-tab="tab-purchases" role="tab">Recent Purchases (${purchaseTrades.length})</button>
+    <button class="tab-btn" data-tab="tab-sales" role="tab">Recent Sales (${salesTrades.length})</button>
+  </div>
+
+  <!-- Tab: Top Purchases -->
+  <div class="tab-panel" id="tab-top" role="tabpanel">
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Top Purchases by Uniqueness Score</h2>
+        <span class="section-count">${topPurchases.length} trades</span>
+      </div>
+      <div class="card-grid">
+        ${topPurchases.map((t) => renderTradeCard(t, exchangeMap)).join("\n        ")}
+      </div>
+    </section>
+  </div>
 
   ${committeeRelevant.length > 0 ? `
-  <!-- Committee-Relevant Trades -->
-  <section class="section">
-    <div class="section-header">
-      <h2 class="section-title">Committee-Relevant Trades</h2>
-      <span class="section-count">${committeeRelevant.length} trades — traders with committee oversight of the stock's sector</span>
-    </div>
-    <div class="card-grid">
-      ${committeeRelevant.map((t) => renderTradeCard(t, exchangeMap)).join("\n      ")}
-    </div>
-  </section>
+  <!-- Tab: Committee-Relevant -->
+  <div class="tab-panel" id="tab-committee" role="tabpanel">
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Committee-Relevant Trades</h2>
+        <span class="section-count">${committeeRelevant.length} trades — traders with committee oversight of the stock's sector</span>
+      </div>
+      <div class="card-grid">
+        ${committeeRelevant.map((t) => renderTradeCard(t, exchangeMap)).join("\n        ")}
+      </div>
+    </section>
+  </div>
   ` : ""}
 
-  <!-- Recent Purchases -->
-  ${purchaseTrades.length > 0 ? `
-  <section class="section">
-    <div class="section-header">
-      <h2 class="section-title">Recent Purchases</h2>
-      <span class="section-count">${purchaseTrades.length} trades</span>
-    </div>
-    <div class="sales-table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Symbol</th>
-            <th>Amount</th>
-            <th>Trader</th>
-            <th>Asset</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n          ")}
-        </tbody>
-      </table>
-    </div>
-  </section>
-  ` : ""}
+  <!-- Tab: Recent Purchases -->
+  <div class="tab-panel" id="tab-purchases" role="tabpanel">
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Recent Purchases</h2>
+        <span class="section-count">${purchaseTrades.length} trades</span>
+      </div>
+      <div class="sales-table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
+          <tbody>
+            ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n            ")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 
-  <!-- Recent Sales -->
-  ${salesTrades.length > 0 ? `
-  <section class="section">
-    <div class="section-header">
-      <h2 class="section-title">Recent Sales</h2>
-      <span class="section-count">${salesTrades.length} trades</span>
-    </div>
-    <div class="sales-table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Symbol</th>
-            <th>Amount</th>
-            <th>Trader</th>
-            <th>Asset</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n          ")}
-        </tbody>
-      </table>
-    </div>
-  </section>
-  ` : ""}
+  <!-- Tab: Recent Sales -->
+  <div class="tab-panel" id="tab-sales" role="tabpanel">
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Recent Sales</h2>
+        <span class="section-count">${salesTrades.length} trades</span>
+      </div>
+      <div class="sales-table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
+          <tbody>
+            ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n            ")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 
 </main>
 
