@@ -32,7 +32,7 @@ async function loadExchangeMap(): Promise<Map<string, string>> {
   const exchangeMap = new Map<string, string>();
   try {
     type CacheEntry = { data: { exchange?: string | null }; fetchedAt: string };
-    const cached = await loadData<Record<string, CacheEntry>>("market-data-cache");
+    const cached = await loadData<Record<string, CacheEntry>>("market-data-cache.json");
     if (cached?.data) {
       for (const [sym, entry] of Object.entries(cached.data)) {
         if (entry.data.exchange) exchangeMap.set(sym, entry.data.exchange);
