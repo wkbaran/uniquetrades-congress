@@ -103,14 +103,20 @@ function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, strin
   const sClass = scoreClass(score.overallScore);
   const overall = score.overallScore;
 
-  // Factor badges
+  // Factor badges (title attr = native tooltip + CSS tooltip target)
   const badges: string[] = [];
-  if (score.flags.isRareStock) badges.push('<span class="badge badge-rare">Rare</span>');
-  if (score.flags.isHighConviction) badges.push('<span class="badge badge-conviction">High Conviction</span>');
-  if (score.flags.hasCommitteeRelevance) badges.push('<span class="badge badge-committee">Committee</span>');
-  if (score.flags.isDerivative) badges.push('<span class="badge badge-derivative">Derivative</span>');
-  if (score.flags.isSmallCap) badges.push('<span class="badge badge-smallcap">Small Cap</span>');
-  if (score.flags.isIndirectOwnership) badges.push('<span class="badge badge-indirect">Indirect</span>');
+  if (score.flags.isRareStock)
+    badges.push('<span class="badge badge-rare" title="Stock rarely traded by Congress — fewer than 4 total trades">Rare</span>');
+  if (score.flags.isHighConviction)
+    badges.push('<span class="badge badge-conviction" title="Trade is significantly larger than this member\'s typical trade size">High Conviction</span>');
+  if (score.flags.hasCommitteeRelevance)
+    badges.push('<span class="badge badge-committee" title="Trader serves on a committee that oversees this stock\'s sector — potential insider knowledge">Committee</span>');
+  if (score.flags.isDerivative)
+    badges.push('<span class="badge badge-derivative" title="Options, warrants, or other derivatives — signals timing sensitivity">Derivative</span>');
+  if (score.flags.isSmallCap)
+    badges.push('<span class="badge badge-smallcap" title="Small or micro-cap stock (market cap below $2B) — less analyst coverage">Small Cap</span>');
+  if (score.flags.isIndirectOwnership)
+    badges.push('<span class="badge badge-indirect" title="Trade made via a spouse or family member rather than directly by the member">Indirect</span>');
 
   // Score explanation lines
   const details: string[] = [];
@@ -399,7 +405,36 @@ const CSS = `
     border-radius: 4px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+    position: relative;
+    cursor: default;
   }
+  /* CSS tooltip shown on hover (supplements native title attr) */
+  .badge::after {
+    content: attr(title);
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.72rem;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    max-width: 280px;
+    white-space: normal;
+    text-align: center;
+  }
+  .badge:hover::after { opacity: 1; }
   .badge-rare       { background: rgba(203,166,247,0.2); color: var(--mauve); }
   .badge-conviction { background: rgba(250,179,135,0.2); color: var(--peach); }
   .badge-committee  { background: rgba(243,139,168,0.2); color: var(--red); }
