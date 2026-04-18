@@ -438,12 +438,13 @@ const JS = `
 (function () {
   const root = document.documentElement;
   const btn = document.getElementById('theme-btn');
+  // Restore saved preference; default is 'dark' (set on <html>)
   const saved = localStorage.getItem('congress-theme');
-  if (saved) root.setAttribute('data-theme', saved);
+  if (saved === 'light') root.setAttribute('data-theme', 'light');
 
   function updateLabel() {
     const current = root.getAttribute('data-theme');
-    if (btn) btn.textContent = current === 'light' ? '🌙 Dark' : '☀️ Light';
+    if (btn) btn.textContent = current === 'light' ? '\u{1F319} Dark' : '\u2600\uFE0F Light';
   }
   updateLabel();
 
@@ -451,8 +452,8 @@ const JS = `
     btn.addEventListener('click', function () {
       const current = root.getAttribute('data-theme');
       const next = current === 'light' ? 'dark' : 'light';
-      root.setAttribute('data-theme', next === 'dark' ? '' : 'light');
-      localStorage.setItem('congress-theme', next === 'dark' ? '' : 'light');
+      root.setAttribute('data-theme', next);
+      localStorage.setItem('congress-theme', next);
       updateLabel();
     });
   }
@@ -504,7 +505,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     : "";
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
