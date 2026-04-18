@@ -767,6 +767,116 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Member page builder
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MemberPageOptions {
+  memberName: string;
+  chamber: string; // "Sen." | "Rep."
+  party: string | undefined;
+  trades: Array<{ trade: FMPTrade; party: string | undefined }>;
+  dateLabel: string;
+  reportUrl: string;
+  indexUrl?: string;
+  exchangeMap?: Map<string, string>;
+}
+
+export function buildMemberPage(opts: MemberPageOptions): string {
+  const { memberName, chamber, party, trades, dateLabel, reportUrl, indexUrl, exchangeMap = new Map() } = opts;
+
+  const purchases = trades
+    .filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
+  const sales = trades
+    .filter((t) => (t.trade.type || "").toLowerCase().includes("sale"));
+
+  const pLabel = partyLabel(party);
+  const pClass = partyClass(party);
+
+  const navLinks = [
+    indexUrl ? `<a href="${esc(indexUrl)}">← Archive</a>` : "",
+    `<a href="${esc(reportUrl)}">← Report</a>`,
+  ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+
+  function tradeTable(rows: typeof trades, title: string): string {
+    if (!rows.length) return "";
+    return `
+  <section class="section">
+    <div class="section-header">
+      <h2 class="section-title">${esc(title)}</h2>
+      <span class="section-count">${rows.length} trades</span>
+    </div>
+    <div class="sales-table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Asset</th></tr></thead>
+        <tbody>
+          ${rows.map(({ trade }) => {
+            const rawSym = trade.symbol || "N/A";
+            const sym = esc(rawSym);
+            const exchange = trade.symbol ? exchangeMap.get(trade.symbol) : undefined;
+            const tvUrl = trade.symbol ? tradingViewUrl(trade.symbol, exchange) : null;
+            const symCell = tvUrl
+              ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
+              : sym;
+            const amount = esc(formatAmount(trade.amount));
+            const date = esc(trade.transactionDate || "");
+            const desc = esc(trade.assetDescription || "");
+            const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? esc(trade.owner) : "";
+            return `
+          <tr>
+            <td class="sale-date">${date}</td>
+            <td class="sale-sym">${symCell}</td>
+            <td class="sale-amount">${amount}</td>
+            <td class="sale-desc">${desc}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}</td>
+          </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>
+  </section>`;
+  }
+
+  return `<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${esc(chamber)} ${esc(memberName)} — ${esc(dateLabel)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+  <style>${CSS}</style>
+</head>
+<body>
+<header class="site-header">
+  <div>
+    <div class="site-title">${esc(chamber)} ${esc(memberName)}${pLabel ? ` <span class="party-tag ${pClass}">${esc(pLabel)}</span>` : ""}</div>
+    <div class="site-subtitle">${esc(dateLabel)}</div>
+  </div>
+  <div class="header-right">
+    ${navLinks}
+    <button class="theme-btn" id="theme-btn">☀️ Light</button>
+  </div>
+</header>
+<main>
+  <div class="stats-bar">
+    <span class="stat-item"><strong>${purchases.length}</strong> purchases</span>
+    <span class="stat-sep">·</span>
+    <span class="stat-item"><strong>${sales.length}</strong> sales</span>
+    <span class="stat-sep">·</span>
+    <span class="stat-item"><strong>${trades.length}</strong> total</span>
+  </div>
+  ${tradeTable(purchases, "Purchases")}
+  ${tradeTable(sales, "Sales")}
+</main>
+<footer>
+  Data sourced from the Financial Modeling Prep API and congress-legislators.
+  Scores reflect uniqueness signals; not investment advice.
+</footer>
+<script>${JS}</script>
+</body>
+</html>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Party page builder
 // ─────────────────────────────────────────────────────────────────────────────
 
