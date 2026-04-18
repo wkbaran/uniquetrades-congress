@@ -51,6 +51,8 @@ export interface MarketData {
   sector: string | null;
   industry: string | null;
   averageVolume: number | null;
+  /** Exchange short name from FMP (e.g. "NASDAQ", "NYSE", "AMEX") */
+  exchange?: string | null;
 }
 
 /**

@@ -2,6 +2,28 @@ import type { AnalysisReport, AnalyzedTrade } from "../services/analysis-service
 import type { FMPTrade } from "../types/index.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TradingView link helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Map FMP exchangeShortName → TradingView exchange prefix */
+function mapExchange(exchange: string | null | undefined): string | null {
+  if (!exchange) return null;
+  const e = exchange.toUpperCase();
+  if (e.includes("NASDAQ")) return "NASDAQ";
+  if (e.includes("AMEX") || e.includes("AMERICAN")) return "AMEX";
+  if (e.startsWith("NYSE")) return "NYSE";
+  if (e.includes("OTC") || e.includes("PINK")) return "OTC";
+  if (e.includes("CBOE")) return "CBOE";
+  return null; // TradingView will auto-detect for unknown exchanges
+}
+
+function tradingViewUrl(symbol: string, exchange: string | null | undefined): string {
+  const prefix = mapExchange(exchange);
+  const query = prefix ? `${prefix}:${symbol}` : symbol;
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(query)}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -60,9 +82,15 @@ function typeClass(type: string | undefined): string {
 // Card rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderTradeCard(analyzed: AnalyzedTrade): string {
+function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, string>): string {
   const { trade, trader, score } = analyzed;
-  const sym = esc(trade.symbol || "N/A");
+  const rawSym = trade.symbol || "N/A";
+  const sym = esc(rawSym);
+  const exchange = trade.symbol ? exchangeMap.get(trade.symbol) : undefined;
+  const tvUrl = trade.symbol ? tradingViewUrl(trade.symbol, exchange) : null;
+  const symHtml = tvUrl
+    ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
+    : `<span>${sym}</span>`;
   const desc = esc(trade.assetDescription || "");
   const name = esc(`${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim());
   const chamber = esc(analyzed.chamber === "senate" ? "Sen." : "Rep.");
@@ -126,7 +154,7 @@ function renderTradeCard(analyzed: AnalyzedTrade): string {
 <article class="trade-card">
   <div class="card-top">
     <div class="symbol-block">
-      <span class="symbol">${sym}</span>
+      <span class="symbol">${symHtml}</span>
       <span class="trade-type ${tClass}">${tLabel}</span>
     </div>
     <span class="score-badge ${sClass}">${overall}</span>
@@ -145,10 +173,19 @@ function renderTradeCard(analyzed: AnalyzedTrade): string {
 </article>`;
 }
 
-function renderSaleRow(trade: FMPTrade, party: string | undefined): string {
-  const sym = esc(trade.symbol || "N/A");
+function renderSaleRow(
+  trade: FMPTrade,
+  party: string | undefined,
+  exchangeMap: Map<string, string>
+): string {
+  const rawSym = trade.symbol || "N/A";
+  const sym = esc(rawSym);
+  const exchange = trade.symbol ? exchangeMap.get(trade.symbol) : undefined;
+  const tvUrl = trade.symbol ? tradingViewUrl(trade.symbol, exchange) : null;
+  const symCell = tvUrl
+    ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
+    : sym;
   const name = esc(`${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim());
-  const chamber = trade.firstName ? "" : "";
   const pLabel = partyLabel(party);
   const pClass = partyClass(party);
   const amount = esc(formatAmount(trade.amount));
@@ -159,7 +196,7 @@ function renderSaleRow(trade: FMPTrade, party: string | undefined): string {
   return `
 <tr>
   <td class="sale-date">${date}</td>
-  <td class="sale-sym">${sym}</td>
+  <td class="sale-sym">${symCell}</td>
   <td class="sale-amount">${amount}</td>
   <td class="sale-trader">${name}${pLabel ? ` <span class="party-tag ${pClass}">${pLabel}</span>` : ""}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}</td>
   <td class="sale-desc">${desc}</td>
@@ -306,7 +343,9 @@ const CSS = `
     gap: 0.5rem;
   }
   .symbol-block { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-  .symbol { font-size: 1.1rem; font-weight: 800; color: var(--accent); letter-spacing: 0.04em; }
+  .symbol { font-size: 1.1rem; font-weight: 800; letter-spacing: 0.04em; }
+  .symbol-link { color: var(--accent); text-decoration: none; }
+  .symbol-link:hover { text-decoration: underline; }
   .trade-type {
     font-size: 0.7rem;
     font-weight: 600;
@@ -472,10 +511,12 @@ export interface HtmlReportOptions {
   dateLabel: string;
   /** Link back to the index page */
   indexUrl?: string;
+  /** Symbol → FMP exchangeShortName, used to build TradingView chart links */
+  exchangeMap?: Map<string, string>;
 }
 
 export function buildHtmlReport(opts: HtmlReportOptions): string {
-  const { report, salesTrades, dateLabel, indexUrl } = opts;
+  const { report, salesTrades, dateLabel, indexUrl, exchangeMap = new Map() } = opts;
 
   // Top purchases (score >= 40, sorted by score desc)
   const topPurchases = [...report.scoredTrades]
@@ -549,7 +590,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
       <span class="section-count">${topPurchases.length} trades</span>
     </div>
     <div class="card-grid">
-      ${topPurchases.map(renderTradeCard).join("\n      ")}
+      ${topPurchases.map((t) => renderTradeCard(t, exchangeMap)).join("\n      ")}
     </div>
   </section>
 
@@ -561,7 +602,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
       <span class="section-count">${committeeRelevant.length} trades — traders with committee oversight of the stock's sector</span>
     </div>
     <div class="card-grid">
-      ${committeeRelevant.map(renderTradeCard).join("\n      ")}
+      ${committeeRelevant.map((t) => renderTradeCard(t, exchangeMap)).join("\n      ")}
     </div>
   </section>
   ` : ""}
@@ -585,7 +626,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
           </tr>
         </thead>
         <tbody>
-          ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party)).join("\n          ")}
+          ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n          ")}
         </tbody>
       </table>
     </div>

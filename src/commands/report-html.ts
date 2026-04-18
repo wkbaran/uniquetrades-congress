@@ -27,6 +27,20 @@ function weekLabel(date: Date): string {
   });
 }
 
+/** Load exchange info from the market data cache (populated by --market-data runs). */
+async function loadExchangeMap(): Promise<Map<string, string>> {
+  const exchangeMap = new Map<string, string>();
+  try {
+    type CacheEntry = { data: { exchange?: string | null }; fetchedAt: string };
+    const cached = await loadData<Record<string, CacheEntry>>("market-data-cache");
+    if (cached?.data) {
+      for (const [sym, entry] of Object.entries(cached.data)) {
+        if (entry.data.exchange) exchangeMap.set(sym, entry.data.exchange);
+      }
+    }
+  } catch { /* cache not available */ }
+  return exchangeMap;
+}
 
 export const reportHtmlCommand = new Command("report:html")
   .description("Generate a weekly HTML report and optionally publish to AWS S3")
@@ -143,6 +157,9 @@ export const reportHtmlCommand = new Command("report:html")
         .sort((a, b) => (b.transactionDate ?? "").localeCompare(a.transactionDate ?? ""))
         .map((trade) => ({ trade, party: resolveParty(trade) }));
 
+      // ── Build exchange map for TradingView links ─────────────────────────
+      const exchangeMap = await loadExchangeMap();
+
       // ── Generate report HTML ─────────────────────────────────────────────
       const now = new Date();
       const dateStr = now.toISOString().split("T")[0];
@@ -161,6 +178,7 @@ export const reportHtmlCommand = new Command("report:html")
         salesTrades,
         dateLabel: label,
         indexUrl: "index.html",
+        exchangeMap,
       });
 
       await fs.writeFile(path.join(webDir, reportFile), html, "utf-8");

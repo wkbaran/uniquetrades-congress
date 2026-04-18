@@ -219,6 +219,7 @@ export class FMPMarketDataProvider implements MarketDataProvider {
         sector: profile.sector ?? null,
         industry: profile.industry ?? null,
         averageVolume: profile.volAvg ?? profile.averageVolume ?? null,
+        exchange: profile.exchangeShortName ?? null,
       };
     } catch (error) {
       console.warn(`  Error fetching ${symbol}:`, error);
