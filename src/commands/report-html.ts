@@ -132,9 +132,14 @@ export const reportHtmlCommand = new Command("report:html")
           process.exit(1);
         }
 
-        const marketDataProvider = options.marketData ? createFMPProvider() : null;
+        // When using cached trade data, also use cache-only for market data
+        // (no API calls — only load what's already on disk).
+        const cacheOnlyMarket = !options.fetchTrades;
+        const marketDataProvider = options.marketData ? createFMPProvider(cacheOnlyMarket) : null;
         if (!marketDataProvider) {
           console.log("Market data disabled (omit --no-market-data to enable)");
+        } else if (cacheOnlyMarket) {
+          console.log("Market data: cache-only (no API calls — using --no-fetch-trades)");
         }
 
         console.log("\nRunning analysis...");
