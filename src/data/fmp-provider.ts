@@ -29,13 +29,16 @@ export class FMPMarketDataProvider implements MarketDataProvider {
   private cache: CachedMarketData = {};
   private cacheConfig: CacheConfig;
   private unavailableSymbols = new Set<string>();
+  /** When true, use only what's in the cache — no network calls */
+  private cacheOnly: boolean;
 
-  constructor(apiKey: string, cacheConfig: CacheConfig = DEFAULT_CACHE_CONFIG) {
+  constructor(apiKey: string, cacheConfig: CacheConfig = DEFAULT_CACHE_CONFIG, cacheOnly = false) {
     if (!apiKey) {
       throw new Error("FMP API key is required");
     }
     this.apiKey = apiKey;
     this.cacheConfig = cacheConfig;
+    this.cacheOnly = cacheOnly;
   }
 
   getName(): string {
@@ -122,7 +125,10 @@ export class FMPMarketDataProvider implements MarketDataProvider {
 
     console.log(`  Cache: ${results.size} hits, ${uncached.length} to fetch`);
 
-    if (uncached.length === 0) {
+    if (uncached.length === 0 || this.cacheOnly) {
+      if (this.cacheOnly && uncached.length > 0) {
+        console.log(`  Cache-only mode: skipping ${uncached.length} uncached symbol(s)`);
+      }
       return results;
     }
 
@@ -242,12 +248,12 @@ export class FMPMarketDataProvider implements MarketDataProvider {
 /**
  * Create FMP provider from environment
  */
-export function createFMPProvider(): FMPMarketDataProvider {
+export function createFMPProvider(cacheOnly = false): FMPMarketDataProvider {
   const apiKey = process.env.FMP_API_KEY;
   if (!apiKey) {
     throw new Error("FMP_API_KEY environment variable is not set");
   }
-  return new FMPMarketDataProvider(apiKey);
+  return new FMPMarketDataProvider(apiKey, DEFAULT_CACHE_CONFIG, cacheOnly);
 }
 
 // ============================================
