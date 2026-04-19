@@ -168,17 +168,16 @@ export const reportHtmlCommand = new Command("report:html")
       // ── Build exchange map for TradingView links ─────────────────────────
       const exchangeMap = await loadExchangeMap();
 
-      // ── Generate report HTML ─────────────────────────────────────────────
+      // ── Prepare output directory ─────────────────────────────────────────
       const now = new Date();
       const dateStr = now.toISOString().split("T")[0];
       const label = `Week of ${weekLabel(now)}`;
 
-      // All per-run files go into a dated subdirectory
       const dateDir = path.join(webDir, dateStr);
       await fs.mkdir(dateDir, { recursive: true });
 
       const reportFile = "report.html";
-      const reportRelPath = `${dateStr}/report.html`; // relative to webDir, used in manifest
+      const reportRelPath = `${dateStr}/report.html`;
 
       console.log(`\n📄 Building HTML report: ${dateStr}/report.html`);
 
@@ -187,49 +186,10 @@ export const reportHtmlCommand = new Command("report:html")
         .map((t) => t.trade.symbol)
         .filter((s): s is string => !!s);
 
-      const html = buildHtmlReport({
-        report,
-        salesTrades,
-        purchaseTrades,
-        dateLabel: label,
-        indexUrl: "../index.html",
-        exchangeMap,
-      });
-
-      await fs.writeFile(path.join(dateDir, reportFile), html, "utf-8");
-      console.log(`   Saved → ${path.join(dateDir, reportFile)}`);
-
-      // ── Party pages ──────────────────────────────────────────────────────
       const allPartyTrades = [...purchaseTrades, ...salesTrades]
         .sort((a, b) => (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? ""));
 
-      const partyGroups: Array<{ key: string; label: string; file: string }> = [
-        { key: "r", label: "Republican", file: "party-republican.html" },
-        { key: "d", label: "Democrat", file: "party-democrat.html" },
-        { key: "i", label: "Independent", file: "party-independent.html" },
-      ];
-
-      for (const pg of partyGroups) {
-        const filtered = allPartyTrades.filter(({ party }) => {
-          const p = (party ?? "").toLowerCase();
-          if (pg.key === "r") return p.startsWith("r");
-          if (pg.key === "d") return p.startsWith("d");
-          return p && !p.startsWith("r") && !p.startsWith("d");
-        });
-        if (!filtered.length) continue;
-        const partyHtml = buildPartyPage({
-          partyLabel: pg.label,
-          trades: filtered,
-          dateLabel: label,
-          reportUrl: reportFile,
-          indexUrl: "../index.html",
-          exchangeMap,
-        });
-        await fs.writeFile(path.join(dateDir, pg.file), partyHtml, "utf-8");
-        console.log(`   ${pg.label} → ${pg.file} (${filtered.length} trades)`);
-      }
-
-      // ── Member pages ──────────────────────────────────────────────────────
+      // ── Member pages (built first so we know which files exist) ─────────
       type MemberKey = string;
       const memberMap = new Map<MemberKey, {
         name: string; chamber: string; party: string | undefined;
@@ -240,7 +200,7 @@ export const reportHtmlCommand = new Command("report:html")
         const { trade } = item;
         if (!trade.firstName && !trade.lastName) continue;
         const name = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
-        const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
         if (!memberMap.has(key)) {
           const chamber = report.scoredTrades.find(
             (t) => `${t.trade.firstName ?? ""} ${t.trade.lastName ?? ""}`.trim() === name
@@ -250,9 +210,11 @@ export const reportHtmlCommand = new Command("report:html")
         memberMap.get(key)!.trades.push(item);
       }
 
+      const memberPageFiles = new Set<string>();
       let memberCount = 0;
       for (const [key, member] of memberMap) {
         const memberFile = `member-${key}.html`;
+        memberPageFiles.add(memberFile);
         const memberHtml = buildMemberPage({
           memberName: member.name,
           chamber: member.chamber,
@@ -269,6 +231,53 @@ export const reportHtmlCommand = new Command("report:html")
         memberCount++;
       }
       console.log(`   Members → ${memberCount} pages generated`);
+
+      // ── Party pages ──────────────────────────────────────────────────────
+      const partyGroups: Array<{ key: string; label: string; file: string }> = [
+        { key: "r", label: "Republican", file: "party-republican.html" },
+        { key: "d", label: "Democrat", file: "party-democrat.html" },
+        { key: "i", label: "Independent", file: "party-independent.html" },
+      ];
+
+      const partyPageUrls: { republican?: string; democrat?: string; independent?: string } = {};
+      for (const pg of partyGroups) {
+        const filtered = allPartyTrades.filter(({ party }) => {
+          const p = (party ?? "").toLowerCase();
+          if (pg.key === "r") return p.startsWith("r");
+          if (pg.key === "d") return p.startsWith("d");
+          return p && !p.startsWith("r") && !p.startsWith("d");
+        });
+        if (!filtered.length) continue;
+        const partyHtml = buildPartyPage({
+          partyLabel: pg.label,
+          trades: filtered,
+          dateLabel: label,
+          reportUrl: reportFile,
+          indexUrl: "../index.html",
+          exchangeMap,
+          memberPageFiles,
+        });
+        await fs.writeFile(path.join(dateDir, pg.file), partyHtml, "utf-8");
+        console.log(`   ${pg.label} → ${pg.file} (${filtered.length} trades)`);
+        if (pg.key === "r") partyPageUrls.republican = pg.file;
+        if (pg.key === "d") partyPageUrls.democrat = pg.file;
+        if (pg.key === "i") partyPageUrls.independent = pg.file;
+      }
+
+      // ── Generate report HTML ─────────────────────────────────────────────
+      const html = buildHtmlReport({
+        report,
+        salesTrades,
+        purchaseTrades,
+        dateLabel: label,
+        indexUrl: "../index.html",
+        exchangeMap,
+        partyPageUrls,
+        memberPageFiles,
+      });
+
+      await fs.writeFile(path.join(dateDir, reportFile), html, "utf-8");
+      console.log(`   Saved → ${path.join(dateDir, reportFile)}`);
 
       // ── Update manifest + rebuild index ──────────────────────────────────
       const manifest = await upsertManifest(webDir, {

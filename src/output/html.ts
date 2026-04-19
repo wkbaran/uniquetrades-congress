@@ -89,7 +89,7 @@ function typeClass(type: string | undefined): string {
 // Card rendering
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, string>): string {
+function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, string>, memberPageFiles?: Set<string>): string {
   const { trade, trader, score } = analyzed;
   const rawSym = trade.symbol || "N/A";
   const sym = esc(rawSym);
@@ -99,7 +99,13 @@ function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, strin
     ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
     : `<span>${sym}</span>`;
   const desc = esc(trade.assetDescription || "");
-  const name = esc(`${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim());
+  const rawName = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
+  const name = esc(rawName);
+  const memberFile = rawName ? `member-${memberKey(rawName)}.html` : null;
+  const memberUrl = memberFile && memberPageFiles?.has(memberFile) ? memberFile : null;
+  const nameHtml = memberUrl
+    ? `<a href="${esc(memberUrl)}">${name}</a>`
+    : name;
   const chamber = esc(analyzed.chamber === "senate" ? "Sen." : "Rep.");
   const party = partyLabel(trader.party);
   const pClass = partyClass(trader.party);
@@ -182,7 +188,7 @@ function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, strin
   </div>
   ${desc ? `<p class="asset-desc">${desc}</p>` : ""}
   <div class="trader-row">
-    <span class="trader-name">${chamber} ${name}</span>
+    <span class="trader-name">${chamber} ${nameHtml}</span>
     ${party ? `<span class="party-tag ${pClass}">${party}</span>` : ""}
   </div>
   <div class="meta-row">
@@ -197,7 +203,8 @@ function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, strin
 function renderSaleRow(
   trade: FMPTrade,
   party: string | undefined,
-  exchangeMap: Map<string, string>
+  exchangeMap: Map<string, string>,
+  memberPageFiles?: Set<string>
 ): string {
   const rawSym = trade.symbol || "N/A";
   const sym = esc(rawSym);
@@ -206,7 +213,11 @@ function renderSaleRow(
   const symCell = tvUrl
     ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
     : sym;
-  const name = esc(`${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim());
+  const rawName = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
+  const name = esc(rawName);
+  const memberFile = rawName ? `member-${memberKey(rawName)}.html` : null;
+  const memberUrl = memberFile && memberPageFiles?.has(memberFile) ? memberFile : null;
+  const nameHtml = memberUrl ? `<a href="${esc(memberUrl)}">${name}</a>` : name;
   const pLabel = partyLabel(party);
   const pClass = partyClass(party);
   const amount = esc(formatAmount(trade.amount));
@@ -219,7 +230,7 @@ function renderSaleRow(
   <td class="sale-date">${date}</td>
   <td class="sale-sym">${symCell}</td>
   <td class="sale-amount">${amount}</td>
-  <td class="sale-trader">${name}${pLabel ? ` <span class="party-tag ${pClass}">${pLabel}</span>` : ""}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}</td>
+  <td class="sale-trader">${nameHtml}${pLabel ? ` <span class="party-tag ${pClass}">${pLabel}</span>` : ""}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}</td>
   <td class="sale-desc">${desc}</td>
 </tr>`;
 }
@@ -516,6 +527,21 @@ const CSS = `
     margin-top: 2rem;
   }
 
+  /* Party nav links */
+  .party-nav {
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    text-decoration: none;
+    border: 1px solid var(--border);
+    color: var(--text);
+    transition: background 0.15s;
+  }
+  .party-nav:hover { background: var(--surface2); text-decoration: none; }
+  .party-nav-r { color: var(--party-r); border-color: rgba(243,139,168,0.4); }
+  .party-nav-d { color: var(--party-d); border-color: rgba(137,180,250,0.4); }
+
   /* Tabs */
   .tab-bar {
     display: flex;
@@ -612,10 +638,24 @@ export interface HtmlReportOptions {
   indexUrl?: string;
   /** Symbol → FMP exchangeShortName, used to build TradingView chart links */
   exchangeMap?: Map<string, string>;
+  /** URLs for generated party pages (relative to this report's location) */
+  partyPageUrls?: { republican?: string; democrat?: string; independent?: string };
+  /** Set of member page filenames that exist (relative to this report's location) */
+  memberPageFiles?: Set<string>;
+}
+
+/** Compute the filename key for a member name (same formula used in report-html.ts) */
+function memberKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 export function buildHtmlReport(opts: HtmlReportOptions): string {
-  const { report, salesTrades, purchaseTrades, dateLabel, indexUrl, exchangeMap = new Map() } = opts;
+  const {
+    report, salesTrades, purchaseTrades, dateLabel, indexUrl,
+    exchangeMap = new Map(),
+    partyPageUrls,
+    memberPageFiles,
+  } = opts;
 
   // Top purchases (score >= 40, sorted by score desc)
   const topPurchases = [...report.scoredTrades]
@@ -644,6 +684,12 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     ? `<a href="${esc(indexUrl)}">← Archive</a>`
     : "";
 
+  const partyLinks = [
+    partyPageUrls?.republican ? `<a href="${esc(partyPageUrls.republican)}" class="party-nav party-nav-r">Republican</a>` : "",
+    partyPageUrls?.democrat   ? `<a href="${esc(partyPageUrls.democrat)}"   class="party-nav party-nav-d">Democrat</a>` : "",
+    partyPageUrls?.independent? `<a href="${esc(partyPageUrls.independent)}" class="party-nav">Independent</a>` : "",
+  ].filter(Boolean).join(" ");
+
   return `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -663,6 +709,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
   </div>
   <div class="header-right">
     ${navLink}
+    ${partyLinks}
     <button class="theme-btn" id="theme-btn">☀️ Light</button>
   </div>
 </header>
@@ -698,7 +745,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
         <span class="section-count">${topPurchases.length} trades</span>
       </div>
       <div class="card-grid">
-        ${topPurchases.map((t) => renderTradeCard(t, exchangeMap)).join("\n        ")}
+        ${topPurchases.map((t) => renderTradeCard(t, exchangeMap, memberPageFiles)).join("\n        ")}
       </div>
     </section>
   </div>
@@ -712,7 +759,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
         <span class="section-count">${committeeRelevant.length} trades — traders with committee oversight of the stock's sector</span>
       </div>
       <div class="card-grid">
-        ${committeeRelevant.map((t) => renderTradeCard(t, exchangeMap)).join("\n        ")}
+        ${committeeRelevant.map((t) => renderTradeCard(t, exchangeMap, memberPageFiles)).join("\n        ")}
       </div>
     </section>
   </div>
@@ -729,7 +776,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
         <table>
           <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
           <tbody>
-            ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n            ")}
+            ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles)).join("\n            ")}
           </tbody>
         </table>
       </div>
@@ -747,7 +794,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
         <table>
           <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
           <tbody>
-            ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n            ")}
+            ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles)).join("\n            ")}
           </tbody>
         </table>
       </div>
@@ -779,10 +826,11 @@ export interface MemberPageOptions {
   reportUrl: string;
   indexUrl?: string;
   exchangeMap?: Map<string, string>;
+  memberPageFiles?: Set<string>;
 }
 
 export function buildMemberPage(opts: MemberPageOptions): string {
-  const { memberName, chamber, party, trades, dateLabel, reportUrl, indexUrl, exchangeMap = new Map() } = opts;
+  const { memberName, chamber, party, trades, dateLabel, reportUrl, indexUrl, exchangeMap = new Map(), memberPageFiles } = opts;
 
   const purchases = trades
     .filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
@@ -887,10 +935,11 @@ export interface PartyPageOptions {
   reportUrl: string;
   indexUrl?: string;
   exchangeMap?: Map<string, string>;
+  memberPageFiles?: Set<string>;
 }
 
 export function buildPartyPage(opts: PartyPageOptions): string {
-  const { partyLabel, trades, dateLabel, reportUrl, indexUrl, exchangeMap = new Map() } = opts;
+  const { partyLabel, trades, dateLabel, reportUrl, indexUrl, exchangeMap = new Map(), memberPageFiles } = opts;
 
   const purchases = trades
     .filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
@@ -914,7 +963,7 @@ export function buildPartyPage(opts: PartyPageOptions): string {
       <table>
         <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
         <tbody>
-          ${rows.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap)).join("\n          ")}
+          ${rows.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles)).join("\n          ")}
         </tbody>
       </table>
     </div>
