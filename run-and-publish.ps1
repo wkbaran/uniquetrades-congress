@@ -1,7 +1,7 @@
 # uniquetrades-congress: generate report then publish
 # Designed for use with Windows Task Scheduler
 
-$ProjectDir = "C:\Users\billb\projects\uniquetrades-congress"
+$ProjectDir = $PSScriptRoot
 $LogDir = "$ProjectDir\logs"
 $LogFile = "$LogDir\congress-trades-$(Get-Date -Format 'yyyy-MM-dd').log"
 $NodeExe = "node"
@@ -17,6 +17,13 @@ function Write-Log {
 Set-Location $ProjectDir
 
 Write-Log "=== Starting pipeline ==="
+
+Write-Log "Building..."
+& npm run build 2>&1 | Tee-Object -FilePath $LogFile -Append
+if ($LASTEXITCODE -ne 0) {
+    Write-Log "Build failed with exit code $LASTEXITCODE. Aborting."
+    exit $LASTEXITCODE
+}
 
 & $NodeExe --env-file-if-exists=.env dist/index.js report:html --publish 2>&1 | Tee-Object -FilePath $LogFile -Append
 if ($LASTEXITCODE -ne 0) {
