@@ -352,6 +352,95 @@ The report includes:
   - Which committee(s) have oversight
   - The stock's sector and industry classification
 
+## AWS Deployment
+
+The project includes a CloudFormation template (`cloudformation.yaml`) that provisions an S3 bucket, CloudFront distribution, ACM certificate (optional), Route 53 DNS record (optional), and an IAM publish user.
+
+**Must be deployed to `us-east-1`** (ACM certificates used by CloudFront must live there).
+
+### Deploy the stack
+
+```cmd
+aws cloudformation deploy ^
+  --region us-east-1 ^
+  --stack-name congress-trades ^
+  --template-file cloudformation.yaml ^
+  --capabilities CAPABILITY_NAMED_IAM ^
+  --parameter-overrides BucketName=<your-globally-unique-bucket-name>
+```
+
+With a custom domain:
+
+```cmd
+aws cloudformation deploy ^
+  --region us-east-1 ^
+  --stack-name congress-trades ^
+  --template-file cloudformation.yaml ^
+  --capabilities CAPABILITY_NAMED_IAM ^
+  --parameter-overrides ^
+      BucketName=<your-globally-unique-bucket-name> ^
+      CustomDomain=trades.example.com ^
+      HostedZoneId=<your-route53-hosted-zone-id>
+```
+
+### Populate .env from stack outputs
+
+Run `setup-env.sh` after deploying to populate `.env` with the stack outputs:
+
+```bash
+bash setup-env.sh
+```
+
+This fetches `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `CLOUDFRONT_DISTRIBUTION_ID` from the stack and writes them to `.env`, preserving your existing `FMP_API_KEY`.
+
+> **Note:** `AWS_SECRET_ACCESS_KEY` is only returned by CloudFormation on the first deploy. Store it securely — if lost, rotate the key in IAM or redeploy the stack.
+
+### Publish manually
+
+```bash
+node dist/index.js report:html --publish
+```
+
+This fetches fresh trade data, re-runs the analysis, regenerates all HTML (report, member pages, party pages, index), syncs to S3, and invalidates CloudFront.
+
+## Automated Weekly Publishing (Windows)
+
+`run-and-publish.ps1` runs the full pipeline and logs output to `logs\congress-trades-YYYY-MM-DD.log`.
+
+### Create the scheduled task
+
+Run the following in PowerShell as Administrator (adjust the time as needed):
+
+```powershell
+$action = New-ScheduledTaskAction `
+  -Execute "powershell.exe" `
+  -Argument '-NonInteractive -ExecutionPolicy Bypass -File "C:\Users\billb\projects\uniquetrades-congress\run-and-publish.ps1"' `
+  -WorkingDirectory "C:\Users\billb\projects\uniquetrades-congress"
+
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At "7:00AM"
+
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+
+Register-ScheduledTask `
+  -TaskName "Congress Trades - Weekly Report" `
+  -Action $action `
+  -Trigger $trigger `
+  -Settings $settings `
+  -RunLevel Highest
+```
+
+`-StartWhenAvailable` ensures the task runs as soon as possible if the computer was off at the scheduled time.
+
+### Update an existing task
+
+```powershell
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+
+Set-ScheduledTask `
+  -TaskName "Congress Trades - Weekly Report" `
+  -Settings $settings
+```
+
 ## Disclaimer
 
 This tool is for informational and educational purposes only. It does not constitute investment advice. Congressional trading data is publicly available but may be delayed. Always do your own research before making investment decisions.
