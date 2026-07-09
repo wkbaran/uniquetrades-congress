@@ -85,6 +85,12 @@ function typeClass(type: string | undefined): string {
   return "";
 }
 
+/** Link to the original PTR filing (House Clerk PDF or Senate eFD page), when known. */
+function filingLinkHtml(trade: FMPTrade): string {
+  if (!trade.link) return "";
+  return `<a class="filing-link" href="${esc(trade.link)}" target="_blank" rel="noopener noreferrer" title="View original PTR filing">Filing ↗</a>`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Card rendering
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,6 +105,7 @@ function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, strin
     ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
     : `<span>${sym}</span>`;
   const desc = esc(trade.assetDescription || "");
+  const filingLink = filingLinkHtml(trade);
   const rawName = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
   const name = esc(rawName);
   const memberFile = rawName ? `member-${memberKey(rawName)}.html` : null;
@@ -186,7 +193,7 @@ function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, strin
     </div>
     <span class="score-badge ${sClass}">${overall}</span>
   </div>
-  ${desc ? `<p class="asset-desc">${desc}</p>` : ""}
+  ${desc || filingLink ? `<p class="asset-desc">${desc}${filingLink ? ` ${filingLink}` : ""}</p>` : ""}
   <div class="trader-row">
     <span class="trader-name">${chamber} ${nameHtml}</span>
     ${party ? `<span class="party-tag ${pClass}">${party}</span>` : ""}
@@ -224,6 +231,7 @@ function renderSaleRow(
   const date = esc(trade.transactionDate || "");
   const desc = esc(trade.assetDescription || "");
   const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? esc(trade.owner) : "";
+  const filingLink = filingLinkHtml(trade);
 
   return `
 <tr>
@@ -231,7 +239,7 @@ function renderSaleRow(
   <td class="sale-sym">${symCell}</td>
   <td class="sale-amount">${amount}</td>
   <td class="sale-trader">${nameHtml}${pLabel ? ` <span class="party-tag ${pClass}">${pLabel}</span>` : ""}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}</td>
-  <td class="sale-desc">${desc}</td>
+  <td class="sale-desc">${desc}${filingLink ? ` ${filingLink}` : ""}</td>
 </tr>`;
 }
 
@@ -401,6 +409,9 @@ const CSS = `
   .score-low  { background: rgba(108,112,134,0.15); color: var(--score-low); }
 
   .asset-desc { font-size: 0.78rem; color: var(--subtext); }
+
+  .filing-link { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+  .filing-link:hover { color: var(--accent); text-decoration: underline; }
 
   .trader-row { display: flex; align-items: center; gap: 0.5rem; }
   .trader-name { font-size: 0.88rem; font-weight: 600; }
@@ -868,12 +879,13 @@ export function buildMemberPage(opts: MemberPageOptions): string {
             const date = esc(trade.transactionDate || "");
             const desc = esc(trade.assetDescription || "");
             const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? esc(trade.owner) : "";
+            const filingLink = filingLinkHtml(trade);
             return `
           <tr>
             <td class="sale-date">${date}</td>
             <td class="sale-sym">${symCell}</td>
             <td class="sale-amount">${amount}</td>
-            <td class="sale-desc">${desc}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}</td>
+            <td class="sale-desc">${desc}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}${filingLink ? ` ${filingLink}` : ""}</td>
           </tr>`;
           }).join("")}
         </tbody>
