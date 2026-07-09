@@ -11,7 +11,7 @@
 
 import { inflateRawSync } from "zlib";
 import { createHash } from "crypto";
-import { parseHousePtrPdf, type HousePtrTransaction } from "./house-pdf-parser.js";
+import { parseHousePtrPdf, expandHouseAssetType, type HousePtrTransaction } from "./house-pdf-parser.js";
 import type { FMPTrade } from "../types/index.js";
 import type { TradeSourceProvider } from "./trade-source.js";
 import { loadData, saveData } from "../utils/storage.js";
@@ -123,7 +123,7 @@ function toFMPTrade(
       : undefined,
     owner: tx.owner ?? "self",
     assetDescription: tx.assetDescription,
-    assetType: tx.assetType ?? "Stock",
+    assetType: expandHouseAssetType(tx.assetType) ?? "Stock",
     type: normalizeTransactionType(tx.transactionType),
     amount: amountStr,
     comment: tx.comment,
