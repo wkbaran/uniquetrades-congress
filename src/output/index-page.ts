@@ -234,7 +234,6 @@ export function buildIndexPage(entries: ReportManifestEntry[]): string {
 </main>
 
 <footer>
-  Data sourced from Financial Modeling Prep API and congress-legislators.
   Not investment advice.
 </footer>
 

@@ -1,5 +1,6 @@
 import type { FMPTrade, TradeData } from "../types/index.js";
-import { FMPClient } from "./fmp-client.js";
+import type { TradeSourceProvider } from "../data/trade-source.js";
+import { HouseDataUnavailableError } from "../data/stock-watcher-provider.js";
 import { saveData, loadData } from "../utils/storage.js";
 
 const TRADES_FILE = "trades.json";
@@ -26,16 +27,6 @@ export function getTradeKey(trade: FMPTrade): string {
     trade.amount || "",
     trade.owner || "",
   ].join("|");
-}
-
-/**
- * Check if any trade in the array is older than the target date
- */
-function hasTradesOlderThan(trades: FMPTrade[], targetDate: Date): boolean {
-  return trades.some((trade) => {
-    if (!trade.transactionDate) return false;
-    return new Date(trade.transactionDate) < targetDate;
-  });
 }
 
 /**
@@ -78,28 +69,24 @@ function mergeTrades(existing: FMPTrade[], newTrades: FMPTrade[]): FMPTrade[] {
  * @returns Trade data
  */
 export async function fetchTrades(
-  fmpClient: FMPClient,
+  provider: TradeSourceProvider,
   targetDate: Date,
-  limit = 100,
+  _limit = 100,
   refresh = false
 ): Promise<TradeData> {
   let existingData: TradeData | null = null;
   let startDate: Date;
 
   if (refresh) {
-    // Refresh mode: fetch from target date, ignore existing data
     startDate = targetDate;
     console.log(`🔄 Refresh mode: Fetching all trades since ${startDate.toISOString().split("T")[0]}`);
   } else {
-    // Incremental mode: load existing data and fetch only new trades
     existingData = await loadTrades();
 
     if (!existingData) {
-      // No existing data, fetch from target date
       startDate = targetDate;
       console.log(`📥 No existing data found. Fetching trades since ${startDate.toISOString().split("T")[0]}`);
     } else {
-      // Find most recent trade date across both chambers
       const senateMostRecent = getMostRecentTradeDate(existingData.senateTrades);
       const houseMostRecent = getMostRecentTradeDate(existingData.houseTrades);
 
@@ -108,11 +95,9 @@ export async function fetchTrades(
         .reduce((latest, current) => (current > latest ? current : latest), new Date(0));
 
       if (mostRecentDate.getTime() === 0) {
-        // No valid dates in existing data, use target date
         startDate = targetDate;
         console.log(`⚠️  No valid dates in existing data. Fetching since ${startDate.toISOString().split("T")[0]}`);
       } else {
-        // Fetch from one day before most recent to ensure we don't miss anything
         startDate = new Date(mostRecentDate);
         startDate.setDate(startDate.getDate() - 1);
         console.log(
@@ -123,88 +108,27 @@ export async function fetchTrades(
     }
   }
 
-  const targetDateStr = startDate.toISOString().split("T")[0];
-  console.log(`\nFetching new trades from FMP (limit=${limit} per page)...`);
+  console.log(`\nFetching new trades via ${provider.getName()}...`);
 
-  const allSenateTrades: FMPTrade[] = [];
-  const allHouseTrades: FMPTrade[] = [];
+  const newSenateTrades = await provider.fetchSenateTrades(startDate);
 
-  let senateDone = false;
-  let houseDone = false;
-  let page = 0;
-  const maxPages = 50; // Safety limit
-
-  while ((!senateDone || !houseDone) && page < maxPages) {
-    console.log(`  Fetching page ${page}...`);
-
-    const fetches: Promise<FMPTrade[]>[] = [];
-
-    if (!senateDone) {
-      fetches.push(fmpClient.getSenateTrades(page, limit));
+  let newHouseTrades: FMPTrade[];
+  try {
+    newHouseTrades = await provider.fetchHouseTrades(startDate);
+  } catch (err) {
+    if (err instanceof HouseDataUnavailableError) {
+      console.warn(`\n⚠️  ${err.message}`);
+      console.warn("   Using cached House trade data unchanged.\n");
+      newHouseTrades = existingData?.houseTrades ?? [];
     } else {
-      fetches.push(Promise.resolve([]));
+      throw err;
     }
-
-    if (!houseDone) {
-      fetches.push(fmpClient.getHouseTrades(page, limit));
-    } else {
-      fetches.push(Promise.resolve([]));
-    }
-
-    const [senateTrades, houseTrades] = await Promise.all(fetches);
-
-    // Add trades to accumulator
-    if (senateTrades.length > 0) {
-      allSenateTrades.push(...senateTrades);
-      console.log(`    Senate: +${senateTrades.length} trades (total: ${allSenateTrades.length})`);
-
-      // Check if we've reached the target date or no more data
-      if (senateTrades.length < limit || hasTradesOlderThan(senateTrades, startDate)) {
-        senateDone = true;
-        console.log(`    Senate: reached target date or end of data`);
-      }
-    } else {
-      senateDone = true;
-      console.log(`    Senate: no more data`);
-    }
-
-    if (houseTrades.length > 0) {
-      allHouseTrades.push(...houseTrades);
-      console.log(`    House: +${houseTrades.length} trades (total: ${allHouseTrades.length})`);
-
-      // Check if we've reached the target date or no more data
-      if (houseTrades.length < limit || hasTradesOlderThan(houseTrades, startDate)) {
-        houseDone = true;
-        console.log(`    House: reached target date or end of data`);
-      }
-    } else {
-      houseDone = true;
-      console.log(`    House: no more data`);
-    }
-
-    page++;
   }
 
-  if (page >= maxPages) {
-    console.warn(`  Warning: reached max pages limit (${maxPages})`);
-  }
+  console.log(`\nFetched:`);
+  console.log(`  Senate: ${newSenateTrades.length} trades`);
+  console.log(`  House: ${newHouseTrades.length} trades (${existingData?.houseTrades?.length === newHouseTrades.length ? "cached" : "fetched"})`);
 
-  // Filter out trades older than start date
-  const newSenateTrades = allSenateTrades.filter((trade) => {
-    if (!trade.transactionDate) return true;
-    return new Date(trade.transactionDate) >= startDate;
-  });
-
-  const newHouseTrades = allHouseTrades.filter((trade) => {
-    if (!trade.transactionDate) return true;
-    return new Date(trade.transactionDate) >= startDate;
-  });
-
-  console.log(`\nFetched ${page} page(s) from API:`);
-  console.log(`  Senate: ${newSenateTrades.length} trades (filtered from ${allSenateTrades.length})`);
-  console.log(`  House: ${newHouseTrades.length} trades (filtered from ${allHouseTrades.length})`);
-
-  // Merge with existing data if in incremental mode
   let finalSenateTrades: FMPTrade[];
   let finalHouseTrades: FMPTrade[];
 

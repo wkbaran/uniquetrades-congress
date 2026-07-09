@@ -6,6 +6,25 @@ import { loadCommitteeData } from "../services/committee-service.js";
 import { analyzeTrades, formatTradeReport, getCommitteeNames } from "../services/analysis-service.js";
 import { FMPMarketDataProvider } from "../data/fmp-provider.js";
 import { createFMPClient } from "../services/fmp-client.js";
+import { FMPTradeSource } from "../services/fmp-trade-source.js";
+import { createGovernmentProvider } from "../data/government-provider.js";
+import { createEdgarProvider } from "../data/edgar-provider.js";
+
+function createTradeProvider() {
+  if (process.env.DATA_SOURCE === "fmp") {
+    return new FMPTradeSource(createFMPClient());
+  }
+  return createGovernmentProvider();
+}
+
+function createMarketDataProvider(ttlMs: number) {
+  if (process.env.DATA_SOURCE === "fmp") {
+    const apiKey = process.env.FMP_API_KEY;
+    if (!apiKey) throw new Error("FMP_API_KEY environment variable is not set");
+    return new FMPMarketDataProvider(apiKey, { ttlMs, maxEntries: 1000 });
+  }
+  return createEdgarProvider();
+}
 import type { ScoringConfig } from "../scoring/types.js";
 import { DEFAULT_SCORING_CONFIG } from "../scoring/types.js";
 import { loadSeenTradeKeys, saveSeenTradeKeys } from "../utils/storage.js";
@@ -62,10 +81,9 @@ export const analyzeCommand = new Command("analyze")
       let tradeData;
       if (options.fetchTrades) {
         console.log("📥 Fetching trade data...\n");
-        const fmpClient = createFMPClient();
         const targetDate = getDefaultTargetDate();
         const refresh = options.refresh || false;
-        tradeData = await fetchTrades(fmpClient, targetDate, 100, refresh);
+        tradeData = await fetchTrades(createTradeProvider(), targetDate, 100, refresh);
         console.log("");
       } else {
         console.log("Using cached trade data (use without --no-fetch-trades to refresh)\n");
@@ -113,18 +131,10 @@ export const analyzeCommand = new Command("analyze")
       // Create market data provider if enabled
       let marketDataProvider = null;
       if (options.marketData) {
-        const apiKey = process.env.FMP_API_KEY;
-        if (!apiKey) {
-          console.error("❌ FMP_API_KEY environment variable is not set");
-          process.exit(1);
-        }
         const ttlDays = parseInt(options.marketDataTtl, 10);
         const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
-        marketDataProvider = new FMPMarketDataProvider(apiKey, {
-          ttlMs,
-          maxEntries: 1000,
-        });
-        console.log(`Market data cache TTL: ${ttlDays} days\n`);
+        marketDataProvider = createMarketDataProvider(ttlMs);
+        console.log(`Market data: ${marketDataProvider.getName()} (TTL ${ttlDays}d)\n`);
       } else {
         console.log("Market data fetching disabled (use without --no-market-data to enable)\n");
       }
