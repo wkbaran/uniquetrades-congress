@@ -19,6 +19,84 @@ const PDF_PAD = Buffer.from(
   "hex"
 );
 
+// ── Official House asset type codes ────────────────────────────────────────
+// Source: https://fd.house.gov/reference/asset-type-codes.aspx
+export const HOUSE_ASSET_TYPE_CODES: Record<string, string> = {
+  "4K": "401K and Other Non-Federal Retirement Accounts",
+  "5C": "529 College Savings Plan",
+  "5F": "529 Portfolio",
+  "5P": "529 Prepaid Tuition Plan",
+  AB: "Asset-Backed Securities",
+  BA: "Bank Accounts, Money Market Accounts and CDs",
+  BK: "Brokerage Accounts",
+  CO: "Collectibles",
+  CS: "Corporate Securities (Bonds and Notes)",
+  CT: "Cryptocurrency",
+  DB: "Defined Benefit Pension",
+  DO: "Debts Owed to the Filer",
+  DS: "Delaware Statutory Trust",
+  EF: "Exchange Traded Funds (ETF)",
+  EQ: "Excepted/Qualified Blind Trust",
+  ET: "Exchange Traded Notes",
+  FA: "Farms",
+  FE: "Foreign Exchange Position (Currency)",
+  FN: "Fixed Annuity",
+  FU: "Futures",
+  GS: "Government Securities and Agency Debt",
+  HE: "Hedge Funds & Private Equity Funds (EIF)",
+  HN: "Hedge Funds & Private Equity Funds (non-EIF)",
+  IC: "Investment Club",
+  IH: "IRA (Held in Cash)",
+  IP: "Intellectual Property & Royalties",
+  IR: "IRA",
+  MA: "Managed Accounts (e.g., SMA and UMA)",
+  MF: "Mutual Funds",
+  MO: "Mineral/Oil/Solar Energy Rights",
+  OI: "Ownership Interest (Holding Investments)",
+  OL: "Ownership Interest (Engaged in a Trade or Business)",
+  OP: "Options",
+  OT: "Other",
+  PE: "Pensions",
+  PM: "Precious Metals",
+  PS: "Stock (Not Publicly Traded)",
+  RE: "Real Estate Invest. Trust (REIT)",
+  RF: "REIT (EIF)",
+  RN: "REIT (non-EIF)",
+  RP: "Real Property",
+  RS: "Restricted Stock Units (RSUs)",
+  SA: "Stock Appreciation Right",
+  // Kept as plain "Stock" (rather than the official "Stocks (including ADRs)" title)
+  // to match the label the rest of the app already special-cases (see report-sales.ts).
+  ST: "Stock",
+  TR: "Trust",
+  VA: "Variable Annuity",
+  VI: "Variable Insurance",
+  WU: "Whole/Universal Insurance",
+};
+
+/** Expand a House asset type code (e.g. "OP") to its official name; falls back to the raw code if unrecognized. */
+export function expandHouseAssetType(code: string | undefined): string | undefined {
+  if (!code) return code;
+  return HOUSE_ASSET_TYPE_CODES[code] ?? code;
+}
+
+// A PTR only reports transactions that already happened, so a transaction/notification
+// date should never land in the future or predate the STOCK Act's 2012 disclosure regime.
+// Asset descriptions for bonds/notes often embed a call or maturity date ("CALL MAKE
+// WHOLE ... 04/22/2036") as a separate text block ahead of the real date columns, which
+// this guards against being mistaken for the actual transaction date.
+const EARLIEST_PLAUSIBLE_DATE = new Date("2012-01-01");
+
+function isPlausibleTransactionDate(mmddyyyy: string): boolean {
+  const m = mmddyyyy.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return false;
+  const d = new Date(`${m[3]}-${m[1]}-${m[2]}`);
+  if (isNaN(d.getTime())) return false;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return d >= EARLIEST_PLAUSIBLE_DATE && d <= tomorrow;
+}
+
 // ── Parsed transaction from a single PTR filing ───────────────────────────
 export interface HousePtrTransaction {
   rowNum?: number;
@@ -399,7 +477,10 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
         const typeM = next.match(/^\[([A-Z]{2,3})\]$/);
         if (typeM) { tx.assetType = typeM[1]; j++; continue; }
 
-        if (txnTypeMap[next]) { tx.transactionType = txnTypeMap[next]; j++; continue; }
+        // Guard against reassignment: stray single-char noise from unrelated form
+        // fields can land in the data font and coincidentally match P/S/E/G/O,
+        // silently overwriting an already-correctly-parsed transaction type.
+        if (!tx.transactionType && txnTypeMap[next]) { tx.transactionType = txnTypeMap[next]; j++; continue; }
         // Owner codes: Sp/SP=spouse, DC=dependent child, JT=joint
         if (next.match(/^(Sp|SP|DC|JT)$/i)) { tx.owner = next.toLowerCase() === "sp" ? "Spouse" : next; j++; continue; }
         // Ticker embedded in asset description as "Something (TICK)" — extract
@@ -408,9 +489,23 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
           if (embeddedTicker && next.length < 100) { tx.assetDescription = (tx.assetDescription + " " + next).trim(); j++; continue; }
         }
 
+        // Real transaction/notification dates always follow the asset type marker
+        // in the row grammar. A date-shaped block seen before that point is part of
+        // the asset description (e.g. a bond's embedded call/maturity date) rather
+        // than the actual transaction date — fold it into the description instead.
         if (dateRe.test(next)) {
-          if (!tx.transactionDate) tx.transactionDate = next;
-          else if (!tx.notificationDate) tx.notificationDate = next;
+          if (!tx.assetType) {
+            tx.assetDescription = (tx.assetDescription + " " + next).trim();
+            j++;
+            continue;
+          }
+          if (!tx.transactionDate && isPlausibleTransactionDate(next)) {
+            tx.transactionDate = next;
+          } else if (!tx.notificationDate && isPlausibleTransactionDate(next)) {
+            tx.notificationDate = next;
+          } else if (!isPlausibleTransactionDate(next)) {
+            flags.push(`Ignored implausible date "${next}" for: "${tx.assetDescription.slice(0, 40)}"`);
+          }
           j++;
           continue;
         }
