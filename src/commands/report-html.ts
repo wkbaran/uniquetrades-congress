@@ -7,6 +7,23 @@ import { analyzeTrades } from "../services/analysis-service.js";
 import type { AnalysisReport } from "../services/analysis-service.js";
 import { createFMPProvider } from "../data/fmp-provider.js";
 import { createFMPClient } from "../services/fmp-client.js";
+import { FMPTradeSource } from "../services/fmp-trade-source.js";
+import { createGovernmentProvider } from "../data/government-provider.js";
+import { createEdgarProvider } from "../data/edgar-provider.js";
+
+function createTradeProvider() {
+  if (process.env.DATA_SOURCE === "fmp") {
+    return new FMPTradeSource(createFMPClient());
+  }
+  return createGovernmentProvider();
+}
+
+function createMarketDataProvider(cacheOnly: boolean) {
+  if (process.env.DATA_SOURCE === "fmp") {
+    return createFMPProvider(cacheOnly);
+  }
+  return createEdgarProvider(cacheOnly);
+}
 import { buildHtmlReport, buildPartyPage, buildMemberPage } from "../output/html.js";
 import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest } from "../output/index-page.js";
 import { publishOutput } from "../publish.js";
@@ -118,9 +135,8 @@ export const reportHtmlCommand = new Command("report:html")
         let tradeData;
         if (options.fetchTrades) {
           console.log("📥 Fetching fresh trade data...");
-          const fmpClient = createFMPClient();
           const targetDate = getDefaultTargetDate();
-          tradeData = await fetchTrades(fmpClient, targetDate);
+          tradeData = await fetchTrades(createTradeProvider(), targetDate);
           console.log("");
         } else {
           console.log("Using cached trade data (omit --no-fetch-trades to refresh)");
@@ -135,7 +151,7 @@ export const reportHtmlCommand = new Command("report:html")
         // When using cached trade data, also use cache-only for market data
         // (no API calls — only load what's already on disk).
         const cacheOnlyMarket = !options.fetchTrades;
-        const marketDataProvider = options.marketData ? createFMPProvider(cacheOnlyMarket) : null;
+        const marketDataProvider = options.marketData ? createMarketDataProvider(cacheOnlyMarket) : null;
         if (!marketDataProvider) {
           console.log("Market data disabled (omit --no-market-data to enable)");
         } else if (cacheOnlyMarket) {

@@ -1,7 +1,16 @@
 import { Command } from "commander";
 import { fetchTrades, getTradeStats, getDefaultTargetDate } from "../services/trade-service.js";
 import { createFMPClient } from "../services/fmp-client.js";
+import { FMPTradeSource } from "../services/fmp-trade-source.js";
+import { createGovernmentProvider } from "../data/government-provider.js";
 import { getDataAge, formatDuration } from "../utils/storage.js";
+
+function createTradeProvider() {
+  if (process.env.DATA_SOURCE === "fmp") {
+    return new FMPTradeSource(createFMPClient());
+  }
+  return createGovernmentProvider();
+}
 
 export const fetchTradesCommand = new Command("fetch:trades")
   .description("Fetch congressional trades from FMP (incremental by default)")
@@ -25,8 +34,7 @@ export const fetchTradesCommand = new Command("fetch:trades")
       const limit = parseInt(options.limit, 10);
       const refresh = options.refresh || false;
 
-      const fmpClient = createFMPClient();
-      const data = await fetchTrades(fmpClient, targetDate, limit, refresh);
+      const data = await fetchTrades(createTradeProvider(), targetDate, limit, refresh);
 
       const senateStats = getTradeStats(data.senateTrades);
       const houseStats = getTradeStats(data.houseTrades);

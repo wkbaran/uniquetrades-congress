@@ -804,7 +804,6 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
 </main>
 
 <footer>
-  Data sourced from the Financial Modeling Prep API and congress-legislators.
   Scores reflect uniqueness signals; not investment advice.
 </footer>
 
@@ -916,7 +915,6 @@ export function buildMemberPage(opts: MemberPageOptions): string {
   ${tradeTable(sales, "Sales")}
 </main>
 <footer>
-  Data sourced from the Financial Modeling Prep API and congress-legislators.
   Scores reflect uniqueness signals; not investment advice.
 </footer>
 <script>${JS}</script>
@@ -1003,7 +1001,6 @@ export function buildPartyPage(opts: PartyPageOptions): string {
   ${tradeTable(sales, "Sales")}
 </main>
 <footer>
-  Data sourced from the Financial Modeling Prep API and congress-legislators.
   Scores reflect uniqueness signals; not investment advice.
 </footer>
 <script>${JS}</script>
