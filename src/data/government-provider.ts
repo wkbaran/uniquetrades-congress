@@ -97,18 +97,34 @@ function normalizeTransactionType(raw: string | undefined): string | undefined {
   return raw;
 }
 
+// Generational suffixes that a naive "last token = surname" split mistakes for
+// the surname itself (e.g. "Rudy Yakym III" -> lastName "III" instead of "Yakym").
+const NAME_SUFFIXES = new Set(["jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"]);
+
+/**
+ * Split a free-text member name into first/last, stripping a trailing
+ * generational suffix so it isn't mistaken for the surname. Only used as a
+ * fallback when a source's own pre-split first/last fields aren't available —
+ * those are always preferred since they're authoritative and never need this
+ * heuristic in the first place.
+ */
+function splitMemberName(name: string): { firstName: string; lastName: string } {
+  const parts = name.replace(/^Hon\.\s*/i, "").trim().split(/\s+/).filter(Boolean);
+  while (parts.length > 2 && NAME_SUFFIXES.has(parts[parts.length - 1].toLowerCase().replace(/\.$/, ""))) {
+    parts.pop();
+  }
+  return { firstName: parts[0] || "", lastName: parts[parts.length - 1] || "" };
+}
+
 // ── Convert parsed PTR transaction to FMPTrade shape ─────────────────────
 function toFMPTrade(
   tx: HousePtrTransaction,
-  memberName: string,
+  firstName: string,
+  lastName: string,
   chamber: "senate" | "house",
   ptrLink: string,
   dateReceived?: string
 ): FMPTrade {
-  const nameParts = memberName.replace(/^Hon\.\s*/i, "").trim().split(/\s+/);
-  const firstName = nameParts[0] || "";
-  const lastName = nameParts.slice(-1)[0] || "";
-
   const amountRange = parseAmountRange(tx.amount);
   const amountStr = tx.amount ?? undefined;
 
@@ -264,9 +280,16 @@ async function processHousePtr(
     return [];
   }
 
-  const memberName = parsed.memberName ?? `${entry.firstName} ${entry.lastName}`;
+  // The House Clerk's own index already provides cleanly split first/last
+  // fields (with generational suffixes like "III" kept separate) — trust
+  // those over re-splitting the PDF's own free-text header, which is only
+  // used as a fallback for the rare case the index entry lacks a name.
+  const { firstName, lastName } = entry.firstName && entry.lastName
+    ? { firstName: entry.firstName, lastName: entry.lastName }
+    : splitMemberName(parsed.memberName ?? `${entry.firstName} ${entry.lastName}`);
+
   const trades = parsed.transactions.map(tx =>
-    toFMPTrade(tx, memberName, "house", ptrUrl, entry.filingDate)
+    toFMPTrade(tx, firstName, lastName, "house", ptrUrl, entry.filingDate)
   );
 
   chamberReport.ptrsProcessed++;
@@ -281,7 +304,7 @@ async function processHousePtr(
     log("House", `  ⚠️  Flags: ${parsed.flags.join("; ")}`);
     chamberReport.flagged.push({
       docId: entry.docId,
-      member: memberName,
+      member: `${firstName} ${lastName}`,
       issues: parsed.flags,
     });
   }
@@ -330,56 +353,67 @@ async function acceptSenatEfdTerms(): Promise<string | null> {
 async function fetchSenatePtrGuids(
   cookie: string,
   sinceDate: Date
-): Promise<Array<{ guid: string; senator: string; filedDate: string }>> {
-  // The AJAX search API returns JSON with PTR (report type 11) filings
-  const startDate = sinceDate.toLocaleDateString("en-US", {
-    month: "2-digit", day: "2-digit", year: "numeric"
-  });
+): Promise<Array<{ guid: string; firstName: string; lastName: string; filedDate: string }>> {
+  // The AJAX search API returns JSON with PTR (report type 11) filings, sorted
+  // newest-first. It's paginated server-side (DataTables-style limit/offset),
+  // so a single fixed-size page silently drops anything past it whenever more
+  // than `pageSize` filings exist in the requested window — keep paging until
+  // a short page confirms we've reached the end (or an old-enough filing does).
+  const pageSize = 200;
+  const maxPages = 25; // 5,000 filings — far beyond any realistic window
+  const results: Array<{ guid: string; firstName: string; lastName: string; filedDate: string }> = [];
 
-  const searchUrl = `${SENATE_SEARCH_URL}?report_types%5B%5D=11&limit=200&offset=0&order_by=-date_received`;
+  for (let page = 0; page < maxPages; page++) {
+    const offset = page * pageSize;
+    const searchUrl = `${SENATE_SEARCH_URL}?report_types%5B%5D=11&limit=${pageSize}&offset=${offset}&order_by=-date_received`;
 
-  const resp = await fetchWithUA(searchUrl, {
-    headers: {
-      "X-Requested-With": "XMLHttpRequest",
-      "Accept": "application/json",
-      "Referer": "https://efdsearch.senate.gov/search/",
-      "Cookie": cookie,
-    },
-  });
+    const resp = await fetchWithUA(searchUrl, {
+      headers: {
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json",
+        "Referer": "https://efdsearch.senate.gov/search/",
+        "Cookie": cookie,
+      },
+    });
 
-  if (!resp.ok) {
-    log("Senate", `  Search API returned ${resp.status} — skipping (API may be in maintenance)`);
-    return [];
-  }
-
-  let json: unknown;
-  try {
-    json = await resp.json();
-  } catch {
-    log("Senate", "  Search API returned non-JSON — skipping");
-    return [];
-  }
-
-  const data = (json as { data?: unknown[] }).data ?? [];
-  const results: Array<{ guid: string; senator: string; filedDate: string }> = [];
-
-  for (const row of data) {
-    const r = row as { first_name?: string; last_name?: string; filed_date?: string; link?: string[] };
-    const link = r.link?.[0] || r.link?.[1] || "";
-    const guidM = link.match(/\/ptr\/([a-f0-9-]+)\//);
-    if (!guidM) continue;
-
-    const filedDate = r.filed_date || "";
-    if (filedDate) {
-      const d = new Date(filedDate);
-      if (!isNaN(d.getTime()) && d < sinceDate) continue;
+    if (!resp.ok) {
+      log("Senate", `  Search API returned ${resp.status} — skipping (API may be in maintenance)`);
+      break;
     }
 
-    results.push({
-      guid: guidM[1],
-      senator: `${r.first_name || ""} ${r.last_name || ""}`.trim(),
-      filedDate,
-    });
+    let json: unknown;
+    try {
+      json = await resp.json();
+    } catch {
+      log("Senate", "  Search API returned non-JSON — skipping");
+      break;
+    }
+
+    const data = (json as { data?: unknown[] }).data ?? [];
+    if (data.length === 0) break;
+
+    let hasOld = false;
+    for (const row of data) {
+      const r = row as { first_name?: string; last_name?: string; filed_date?: string; link?: string[] };
+      const link = r.link?.[0] || r.link?.[1] || "";
+      const guidM = link.match(/\/ptr\/([a-f0-9-]+)\//);
+      if (!guidM) continue;
+
+      const filedDate = r.filed_date || "";
+      if (filedDate) {
+        const d = new Date(filedDate);
+        if (!isNaN(d.getTime()) && d < sinceDate) { hasOld = true; continue; }
+      }
+
+      results.push({
+        guid: guidM[1],
+        firstName: r.first_name || "",
+        lastName: r.last_name || "",
+        filedDate,
+      });
+    }
+
+    if (data.length < pageSize || hasOld) break;
   }
 
   return results;
@@ -481,12 +515,12 @@ function parseSenatePtrPage(html: string): {
 }
 
 async function processSenatePtr(
-  entry: { guid: string; senator: string; filedDate: string },
+  entry: { guid: string; firstName: string; lastName: string; filedDate: string },
   cookie: string,
   chamberReport: ChamberReport
 ): Promise<FMPTrade[]> {
   const ptrUrl = `https://efdsearch.senate.gov/search/view/ptr/${entry.guid}/`;
-  log("Senate", `Processing PTR ${entry.guid}: ${entry.senator}`);
+  log("Senate", `Processing PTR ${entry.guid}: ${entry.lastName}, ${entry.firstName}`);
 
   let html: string;
   try {
@@ -506,13 +540,17 @@ async function processSenatePtr(
   }
 
   const parsed = parseSenatePtrPage(html);
-  const memberName = parsed.memberName ?? entry.senator;
+  // The search API's own first_name/last_name fields are authoritative and
+  // don't need re-splitting; only fall back to the PDF's free-text header
+  // (with suffix-aware splitting) if the search result lacked a name.
+  const { firstName, lastName } = entry.firstName && entry.lastName
+    ? { firstName: entry.firstName, lastName: entry.lastName }
+    : splitMemberName(parsed.memberName ?? `${entry.firstName} ${entry.lastName}`);
 
   const trades: FMPTrade[] = parsed.transactions.map(tx => {
-    const nameParts = memberName.replace(/^Hon\.\s*/i, "").trim().split(/\s+/);
     return {
-      firstName: nameParts[0] || "",
-      lastName: nameParts.slice(-1)[0] || "",
+      firstName,
+      lastName,
       office: undefined,
       link: ptrUrl,
       dateRecieved: parsed.filingDate,
@@ -537,7 +575,7 @@ async function processSenatePtr(
 
   if (parsed.flags.length > 0) {
     log("Senate", `  ⚠️  Flags: ${parsed.flags.join("; ")}`);
-    chamberReport.flagged.push({ docId: entry.guid, member: memberName, issues: parsed.flags });
+    chamberReport.flagged.push({ docId: entry.guid, member: `${firstName} ${lastName}`, issues: parsed.flags });
   }
 
   return trades;
