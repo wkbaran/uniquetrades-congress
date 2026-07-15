@@ -158,6 +158,71 @@ function getBody(latin: string, index: Map<number, number>, n: number): string {
   return latin.slice(bodyStart, latin.indexOf("endobj", bodyStart));
 }
 
+// ── Page tree walking ──────────────────────────────────────────────────────
+// Multi-transaction PTRs span multiple pages. Page 1 is often rendered through
+// a Form XObject wrapper ("q /XOBJ0 Do Q"), but later pages commonly reference
+// their content stream directly via /Contents with fonts on the page's own
+// /Resources — transactions can land on either kind of page, so every page in
+// the document (per the /Pages tree's /Kids order) must be walked, not just
+// whichever Form XObject happens to be found first.
+function findPageOrder(latin: string, index: Map<number, number>): number[] {
+  function expand(n: number, seen: Set<number>): number[] {
+    if (seen.has(n)) return [];
+    seen.add(n);
+    const body = getBody(latin, index, n);
+    const kidsM = body.match(/\/Kids\s*\[([^\]]*)\]/);
+    if (!kidsM) return [n]; // leaf page
+    const kids = [...kidsM[1].matchAll(/(\d+)\s+0\s+R/g)].map((m) => parseInt(m[1]));
+    return kids.flatMap((k) => expand(k, seen));
+  }
+
+  for (const [n] of index) {
+    const body = getBody(latin, index, n);
+    if (/\/Type\s*\/Pages\b/.test(body) && !body.includes("/Parent")) {
+      return expand(n, new Set());
+    }
+  }
+  return [];
+}
+
+interface PageContent {
+  contentObjNum: number;
+  /** Object body containing this page's /Font resource entries. */
+  fontResourceBody: string;
+}
+
+function findPageContent(latin: string, index: Map<number, number>, pageNum: number): PageContent | null {
+  const pageBody = getBody(latin, index, pageNum);
+
+  const xobjRefM = pageBody.match(/\/XObject\s*<<\s*\/\w+\s+(\d+)\s+0\s+R/);
+  if (xobjRefM) {
+    const xobjNum = parseInt(xobjRefM[1]);
+    const xobjBody = getBody(latin, index, xobjNum);
+    if (xobjBody.includes("/Subtype /Form") && xobjBody.includes("/Font")) {
+      return { contentObjNum: xobjNum, fontResourceBody: xobjBody };
+    }
+  }
+
+  const contentsM = pageBody.match(/\/Contents\s+(\d+)\s+0\s+R/);
+  if (contentsM) {
+    return { contentObjNum: parseInt(contentsM[1]), fontResourceBody: pageBody };
+  }
+
+  return null;
+}
+
+/** Fallback for PDFs with no discoverable /Pages tree: scan for any Form XObject with fonts. */
+function findFallbackFormXObject(latin: string, index: Map<number, number>, encN: number): PageContent | null {
+  for (const [n] of index) {
+    if (n === encN || n === 0) continue;
+    const body = getBody(latin, index, n);
+    if (body.includes("/Subtype /Form") && body.includes("/Font")) {
+      return { contentObjNum: n, fontResourceBody: body };
+    }
+  }
+  return null;
+}
+
 function hexVal(s: string | undefined): Buffer {
   return Buffer.from((s || "").replace(/[<>\s]/g, ""), "hex");
 }
@@ -308,50 +373,50 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
   }
   fileKey = fileKey.slice(0, keyLen);
 
-  // Find the form XObject (the main content — page content just says "q /XOBJ0 Do Q")
-  // Scan all objects for a Form XObject with a Font resource
-  let xobjNum: number | null = null;
-  for (const [n] of index) {
-    if (n === encN || n === 0) continue;
-    const body = getBody(latin, index, n);
-    if (body.includes("/Subtype /Form") && body.includes("/Font")) {
-      xobjNum = n;
-      break;
-    }
-  }
+  // Walk every page in document order, extracting text from whichever content
+  // structure that page uses (Form XObject wrapper, or a direct /Contents stream).
+  const pageOrder = findPageOrder(latin, index);
+  const pages: PageContent[] = pageOrder.length
+    ? pageOrder.map((p) => findPageContent(latin, index, p)).filter((p): p is PageContent => p !== null)
+    : [findFallbackFormXObject(latin, index, encN)].filter((p): p is PageContent => p !== null);
 
-  if (!xobjNum) {
+  if (pages.length === 0) {
     flags.push("Could not find Form XObject — PTR may be image-only (scanned PDF)");
     return { flags, transactions: [] };
   }
 
-  // Extract font CIDs→char maps from ToUnicode CMaps
-  const xobjBody = getBody(latin, index, xobjNum);
-  const fontCmaps = new Map<string, Map<number, string>>();
-  const fontRefRe = /\/(F\d+)\s+(\d+)\s+0\s+R/g;
-  let fr: RegExpExecArray | null;
-  while ((fr = fontRefRe.exec(xobjBody)) !== null) {
-    const fname = fr[1];
-    const fObjNum = parseInt(fr[2]);
-    const fontBody = getBody(latin, index, fObjNum);
-    const touM = fontBody.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
-    if (!touM) continue;
-    const cmapText = decryptStream(buf, latin, index, fileKey, parseInt(touM[1]));
-    if (cmapText) fontCmaps.set(fname, parseToUnicodeCmap(cmapText));
+  const blocks: Array<{ font: string; text: string }> = [];
+  let anyCmapsFound = false;
+
+  for (const page of pages) {
+    const fontCmaps = new Map<string, Map<number, string>>();
+    const fontRefRe = /\/(F\d+)\s+(\d+)\s+0\s+R/g;
+    let fr: RegExpExecArray | null;
+    while ((fr = fontRefRe.exec(page.fontResourceBody)) !== null) {
+      const fname = fr[1];
+      const fObjNum = parseInt(fr[2]);
+      const fontBody = getBody(latin, index, fObjNum);
+      const touM = fontBody.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
+      if (!touM) continue;
+      const cmapText = decryptStream(buf, latin, index, fileKey, parseInt(touM[1]));
+      if (cmapText) fontCmaps.set(fname, parseToUnicodeCmap(cmapText));
+    }
+    if (fontCmaps.size > 0) anyCmapsFound = true;
+
+    const stream = decryptStream(buf, latin, index, fileKey, page.contentObjNum);
+    if (!stream) continue;
+
+    blocks.push(...extractTextBlocks(stream, fontCmaps));
   }
 
-  if (fontCmaps.size === 0) {
+  if (!anyCmapsFound) {
     flags.push("No ToUnicode CMaps found — text may not decode correctly");
   }
 
-  // Decrypt and extract text from the XObject
-  const stream = decryptStream(buf, latin, index, fileKey, xobjNum);
-  if (!stream) {
-    flags.push("Could not decrypt XObject content stream");
+  if (blocks.length === 0) {
+    flags.push("Could not decrypt any page content stream");
     return { flags, transactions: [] };
   }
-
-  const blocks = extractTextBlocks(stream, fontCmaps);
 
   // ── Identify the data font (the one with member names, dates, tickers) ──
   // Different PTR generations use different font names for the data (F6, F7, etc.)
@@ -489,22 +554,18 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
           if (embeddedTicker && next.length < 100) { tx.assetDescription = (tx.assetDescription + " " + next).trim(); j++; continue; }
         }
 
-        // Real transaction/notification dates always follow the asset type marker
-        // in the row grammar. A date-shaped block seen before that point is part of
-        // the asset description (e.g. a bond's embedded call/maturity date) rather
-        // than the actual transaction date — fold it into the description instead.
+        // Field order varies between filings (dates can appear before or after
+        // the ticker/asset-type marker), so plausibility — not position — decides
+        // whether a date-shaped block is the real transaction date. A bond's
+        // embedded call/maturity date (e.g. "CALL MAKE WHOLE ... 04/22/2036")
+        // fails that check and gets folded into the description instead.
         if (dateRe.test(next)) {
-          if (!tx.assetType) {
-            tx.assetDescription = (tx.assetDescription + " " + next).trim();
-            j++;
-            continue;
-          }
           if (!tx.transactionDate && isPlausibleTransactionDate(next)) {
             tx.transactionDate = next;
           } else if (!tx.notificationDate && isPlausibleTransactionDate(next)) {
             tx.notificationDate = next;
           } else if (!isPlausibleTransactionDate(next)) {
-            flags.push(`Ignored implausible date "${next}" for: "${tx.assetDescription.slice(0, 40)}"`);
+            tx.assetDescription = (tx.assetDescription + " " + next).trim();
           }
           j++;
           continue;
