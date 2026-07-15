@@ -108,7 +108,7 @@ const NAME_SUFFIXES = new Set(["jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"]
  * those are always preferred since they're authoritative and never need this
  * heuristic in the first place.
  */
-function splitMemberName(name: string): { firstName: string; lastName: string } {
+export function splitMemberName(name: string): { firstName: string; lastName: string } {
   const parts = name.replace(/^Hon\.\s*/i, "").trim().split(/\s+/).filter(Boolean);
   while (parts.length > 2 && NAME_SUFFIXES.has(parts[parts.length - 1].toLowerCase().replace(/\.$/, ""))) {
     parts.pop();
