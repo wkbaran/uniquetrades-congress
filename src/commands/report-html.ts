@@ -70,6 +70,7 @@ export const reportHtmlCommand = new Command("report:html")
   )
   .option("--render-only", "Re-render HTML from the last saved analysis without re-fetching or re-analyzing")
   .option("--rebuild-index", "Rebuild index.html from the manifest (prunes deleted reports) without generating a new report")
+  .option("--skip-unchanged", "Skip generating and publishing if fetching found no new trades since the last run (for scheduled/automated runs)")
   .option("--publish", "Sync output/web to S3 and invalidate CloudFront after generating")
   .option("--bucket <name>", "S3 bucket name (or set S3_BUCKET env var)")
   .option("--region <region>", "AWS region (default: us-east-1 or AWS_REGION env var)")
@@ -135,9 +136,20 @@ export const reportHtmlCommand = new Command("report:html")
         let tradeData;
         if (options.fetchTrades) {
           console.log("📥 Fetching fresh trade data...");
+          const previousData = await loadTrades();
+          const previousCount = previousData
+            ? previousData.senateTrades.length + previousData.houseTrades.length
+            : 0;
+
           const targetDate = getDefaultTargetDate();
           tradeData = await fetchTrades(createTradeProvider(), targetDate);
           console.log("");
+
+          const newCount = tradeData.senateTrades.length + tradeData.houseTrades.length;
+          if (options.skipUnchanged && newCount === previousCount) {
+            console.log("No new trades since the last run — skipping report generation and publish.");
+            return;
+          }
         } else {
           console.log("Using cached trade data (omit --no-fetch-trades to refresh)");
           tradeData = await loadTrades();
