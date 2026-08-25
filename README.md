@@ -403,9 +403,13 @@ node dist/index.js report:html --publish
 
 This fetches fresh trade data, re-runs the analysis, regenerates all HTML (report, member pages, party pages, index), syncs to S3, and invalidates CloudFront.
 
-## Automated Weekly Publishing (Windows)
+Add `--skip-unchanged` to skip the regenerate/publish step entirely when the fetch didn't find any new trades since last time — useful for scheduled runs where you don't want to rebuild and re-sync the whole site every time the source happens to have nothing new.
 
-`run-and-publish.ps1` runs the full pipeline and logs output to `logs\congress-trades-YYYY-MM-DD.log`.
+## Automated Publishing (Windows)
+
+`run-and-publish.ps1` runs the full pipeline and logs output to `logs\congress-trades-YYYY-MM-DD.log`. It calls `report:html --publish --skip-unchanged`, so the House Clerk/Senate eFD are fetched every run, but the report is only regenerated and republished when that fetch actually turns up new trades.
+
+The House Clerk and Senate eFD offices are federal government offices — new PTR filings only get published to their sites on business days — so the task is scheduled Monday–Friday rather than daily. Running it more often than that just re-checks a source that hasn't changed, which `--skip-unchanged` now makes cheap (no wasted HTML rebuild or S3 sync), but there's still no reason to fetch on a weekend.
 
 ### Create the scheduled task
 
@@ -417,12 +421,12 @@ $action = New-ScheduledTaskAction `
   -Argument '-NonInteractive -ExecutionPolicy Bypass -File "C:\Users\billb\projects\uniquetrades-congress\run-and-publish.ps1"' `
   -WorkingDirectory "C:\Users\billb\projects\uniquetrades-congress"
 
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At "7:00AM"
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "7:00AM"
 
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 
 Register-ScheduledTask `
-  -TaskName "Congress Trades - Weekly Report" `
+  -TaskName "Congress Trades - Daily Report" `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
@@ -433,11 +437,15 @@ Register-ScheduledTask `
 
 ### Update an existing task
 
+If you already have the old weekly "Congress Trades - Weekly Report" task registered, point it at the new Mon–Fri trigger (or delete it and register the task above under the new name):
+
 ```powershell
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "7:00AM"
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
 
 Set-ScheduledTask `
   -TaskName "Congress Trades - Weekly Report" `
+  -Trigger $trigger `
   -Settings $settings
 ```
 

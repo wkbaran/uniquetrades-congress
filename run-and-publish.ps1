@@ -25,7 +25,7 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-& $NodeExe --env-file-if-exists=.env dist/index.js report:html --publish 2>&1 | Tee-Object -FilePath $LogFile -Append
+& $NodeExe --env-file-if-exists=.env dist/index.js report:html --publish --skip-unchanged 2>&1 | Tee-Object -FilePath $LogFile -Append
 if ($LASTEXITCODE -ne 0) {
     Write-Log "Pipeline failed with exit code $LASTEXITCODE."
     exit $LASTEXITCODE
