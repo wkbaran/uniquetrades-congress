@@ -91,6 +91,22 @@ function filingLinkHtml(trade: FMPTrade): string {
   return `<a class="filing-link" href="${esc(trade.link)}" target="_blank" rel="noopener noreferrer" title="View original PTR filing">Filing ↗</a>`;
 }
 
+function isOptionTrade(trade: FMPTrade): boolean {
+  const t = (trade.assetType || "").toLowerCase();
+  return t.includes("option") || t.includes("warrant") || t.includes("right");
+}
+
+/**
+ * Small inline tag flagging an options/derivative trade in table rows.
+ * PTR filings rarely disclose call vs. put, strike, or expiration, so this
+ * only signals "this leg is a derivative" — see the "Derivative" badge on
+ * the scored cards for the full explanation.
+ */
+function optionTagHtml(trade: FMPTrade): string {
+  if (!isOptionTrade(trade)) return "";
+  return `<span class="option-tag" title="Options, warrants, or other derivatives — signals timing sensitivity">Options</span>`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Card rendering
 // ─────────────────────────────────────────────────────────────────────────────
@@ -232,11 +248,12 @@ function renderSaleRow(
   const desc = esc(trade.assetDescription || "");
   const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? esc(trade.owner) : "";
   const filingLink = filingLinkHtml(trade);
+  const optionTag = optionTagHtml(trade);
 
   return `
 <tr>
   <td class="sale-date">${date}</td>
-  <td class="sale-sym">${symCell}</td>
+  <td class="sale-sym">${symCell}${optionTag ? ` ${optionTag}` : ""}</td>
   <td class="sale-amount">${amount}</td>
   <td class="sale-trader">${nameHtml}${pLabel ? ` <span class="party-tag ${pClass}">${pLabel}</span>` : ""}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}</td>
   <td class="sale-desc">${desc}${filingLink ? ` ${filingLink}` : ""}</td>
@@ -527,6 +544,7 @@ const CSS = `
   .sale-trader { white-space: nowrap; }
   .sale-desc  { color: var(--muted); font-size: 0.75rem; }
   .owner-tag  { font-size: 0.65rem; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.25rem; }
+  .option-tag { font-size: 0.65rem; color: var(--teal); border: 1px solid var(--teal); border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.35rem; font-weight: 600; }
 
   /* Footer */
   footer {
@@ -880,10 +898,11 @@ export function buildMemberPage(opts: MemberPageOptions): string {
             const desc = esc(trade.assetDescription || "");
             const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? esc(trade.owner) : "";
             const filingLink = filingLinkHtml(trade);
+            const optionTag = optionTagHtml(trade);
             return `
           <tr>
             <td class="sale-date">${date}</td>
-            <td class="sale-sym">${symCell}</td>
+            <td class="sale-sym">${symCell}${optionTag ? ` ${optionTag}` : ""}</td>
             <td class="sale-amount">${amount}</td>
             <td class="sale-desc">${desc}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}${filingLink ? ` ${filingLink}` : ""}</td>
           </tr>`;
