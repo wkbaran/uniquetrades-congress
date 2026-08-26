@@ -24,7 +24,7 @@ function createMarketDataProvider(cacheOnly: boolean) {
   }
   return createEdgarProvider(cacheOnly);
 }
-import { buildHtmlReport, buildPartyPage, buildMemberPage } from "../output/html.js";
+import { buildHtmlReport, buildPartyPage, buildMemberPage, buildScoreLookup } from "../output/html.js";
 import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest } from "../output/index-page.js";
 import { publishOutput } from "../publish.js";
 import { loadData, getLatestReport } from "../utils/storage.js";
@@ -219,6 +219,8 @@ export const reportHtmlCommand = new Command("report:html")
         .map((t) => t.trade.symbol)
         .filter((s): s is string => !!s);
 
+      const scoreLookup = buildScoreLookup(report);
+
       const allPartyTrades = [...purchaseTrades, ...salesTrades]
         .sort((a, b) => (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? ""));
 
@@ -259,6 +261,8 @@ export const reportHtmlCommand = new Command("report:html")
           reportUrl: reportFile,
           indexUrl: "../index.html",
           exchangeMap,
+          scoreLookup,
+          dateStr,
         });
         await fs.writeFile(path.join(dateDir, memberFile), memberHtml, "utf-8");
         memberCount++;
@@ -289,6 +293,8 @@ export const reportHtmlCommand = new Command("report:html")
           indexUrl: "../index.html",
           exchangeMap,
           memberPageFiles,
+          scoreLookup,
+          dateStr,
         });
         await fs.writeFile(path.join(dateDir, pg.file), partyHtml, "utf-8");
         console.log(`   ${pg.label} → ${pg.file} (${filtered.length} trades)`);
@@ -307,6 +313,7 @@ export const reportHtmlCommand = new Command("report:html")
         exchangeMap,
         partyPageUrls,
         memberPageFiles,
+        dateStr,
       });
 
       await fs.writeFile(path.join(dateDir, reportFile), html, "utf-8");

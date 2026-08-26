@@ -1,5 +1,6 @@
 import type { AnalysisReport, AnalyzedTrade } from "../services/analysis-service.js";
 import type { FMPTrade } from "../types/index.js";
+import type { UniquenessResult } from "../scoring/types.js";
 import { SENATE_COMMITTEE_TAXONOMY, HOUSE_COMMITTEE_TAXONOMY } from "../data/committee-sector-taxonomy.js";
 
 const COMMITTEE_NAMES = new Map<string, string>(
@@ -97,6 +98,27 @@ function isOptionTrade(trade: FMPTrade): boolean {
 }
 
 /**
+ * House PTRs sometimes abbreviate assetType to a short code instead of spelling
+ * it out the way most filings do. Confirmed against this dataset by matching each
+ * abbreviated code's asset descriptions to the same descriptions under the spelled-out
+ * type (e.g. "Hologic, Inc." appears under both "PS" and "Stock (Not Publicly Traded)").
+ */
+const ASSET_TYPE_LABELS: Record<string, string> = {
+  ST: "Stock",
+  GS: "Government Securities and Agency Debt",
+  OI: "Ownership Interest (Engaged in a Trade or Business)",
+  RS: "Restricted Stock Units (RSUs)",
+  PS: "Stock (Not Publicly Traded)",
+  CS: "Corporate Securities (Bonds and Notes)",
+  OT: "Other",
+};
+
+function assetTypeLabel(assetType: string | undefined): string {
+  if (!assetType) return "";
+  return ASSET_TYPE_LABELS[assetType.toUpperCase()] ?? assetType;
+}
+
+/**
  * Small inline tag flagging an options/derivative trade in table rows.
  * PTR filings rarely disclose call vs. put, strike, or expiration, so this
  * only signals "this leg is a derivative" — see the "Derivative" badge on
@@ -104,7 +126,198 @@ function isOptionTrade(trade: FMPTrade): boolean {
  */
 function optionTagHtml(trade: FMPTrade): string {
   if (!isOptionTrade(trade)) return "";
-  return `<span class="option-tag" title="Options, warrants, or other derivatives — signals timing sensitivity">Options</span>`;
+  return `<span class="option-tag" title="Derivative: Options, warrants, or other derivatives — signals timing sensitivity">OPTN</span>`;
+}
+
+/** Full party name for tooltips, matching the abbreviated party-tag pill (R/D). */
+function partyFullName(party: string | undefined): string {
+  if (!party) return "";
+  const p = party.toLowerCase();
+  if (p.startsWith("r")) return "Republican";
+  if (p.startsWith("d")) return "Democrat";
+  return party;
+}
+
+/** Same badge descriptions used on the Top Purchases / Committee-Relevant cards. */
+const FLAG_DESCRIPTIONS: Record<keyof UniquenessResult["flags"], { label: string; title: string }> = {
+  isRareStock: { label: "Rare", title: "Stock rarely traded by Congress — fewer than 4 total trades" },
+  isHighConviction: { label: "High Conviction", title: "Trade is significantly larger than this member's typical trade size" },
+  hasCommitteeRelevance: { label: "Committee", title: "Trader serves on a committee that oversees this stock's sector — potential insider knowledge" },
+  isDerivative: { label: "Derivative", title: "Options, warrants, or other derivatives — signals timing sensitivity" },
+  isSmallCap: { label: "Small Cap", title: "Small or micro-cap stock (market cap below $2B) — less analyst coverage" },
+  isIndirectOwnership: { label: "Indirect", title: "Trade made via a spouse or family member rather than directly by the member" },
+};
+
+function flagLabels(flags: UniquenessResult["flags"]): string[] {
+  return (Object.keys(FLAG_DESCRIPTIONS) as Array<keyof UniquenessResult["flags"]>)
+    .filter((k) => flags[k])
+    .map((k) => FLAG_DESCRIPTIONS[k].label);
+}
+
+/** Committee badge tooltip: base description plus the full committee name(s) and sector. */
+function committeeBadgeTitle(score: UniquenessResult): string {
+  const base = `Committee: ${FLAG_DESCRIPTIONS.hasCommitteeRelevance.title}`;
+  const rel = score.explanation.committeeRelevance;
+  if (!rel) return base;
+  const parts = [base];
+  const sector = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
+  if (sector) parts.push(`Sector: ${sector}`);
+  if (rel.overlappingCommittees.length) {
+    const names = rel.overlappingCommittees.map((id) => COMMITTEE_NAMES.get(id) ?? id).join(", ");
+    parts.push(`Committees: ${names}`);
+  }
+  return parts.join(" — ");
+}
+
+/**
+ * Small colorized badge pills for the Trader column. Abbreviated (CTEE/SC/HC) since
+ * table rows are tight on space — the full description still shows on hover.
+ */
+function traderBadgesHtml(score: UniquenessResult): string {
+  const badges: string[] = [];
+  if (score.flags.isRareStock)
+    badges.push(`<span class="badge badge-rare" title="Rare: ${esc(FLAG_DESCRIPTIONS.isRareStock.title)}">Rare</span>`);
+  if (score.flags.isHighConviction)
+    badges.push(`<span class="badge badge-conviction" title="High Conviction: ${esc(FLAG_DESCRIPTIONS.isHighConviction.title)}">HC</span>`);
+  if (score.flags.hasCommitteeRelevance)
+    badges.push(`<span class="badge badge-committee" title="${esc(committeeBadgeTitle(score))}">CTEE</span>`);
+  if (score.flags.isSmallCap)
+    badges.push(`<span class="badge badge-smallcap" title="Small Cap: ${esc(FLAG_DESCRIPTIONS.isSmallCap.title)}">SC</span>`);
+  return badges.join("");
+}
+
+/**
+ * Derivative/options pill for the Trader column. Driven directly off the trade's
+ * asset type (not the score lookup) so it never disappears for a trade that
+ * didn't get matched to a scored AnalyzedTrade.
+ */
+function derivativeBadgeHtml(trade: FMPTrade): string {
+  if (!isOptionTrade(trade)) return "";
+  return `<span class="badge badge-derivative" title="Derivative: ${esc(FLAG_DESCRIPTIONS.isDerivative.title)}">OPTN</span>`;
+}
+
+/** Normalize a PTR owner field (which may be spelled out or abbreviated) to a short code + tooltip. */
+const OWNER_CODES: Record<"spouse" | "joint" | "child", { code: string; title: string }> = {
+  spouse: { code: "SP", title: "Spouse — trade made by the member's spouse rather than the member directly" },
+  joint: { code: "JT", title: "Joint — trade made jointly by the member and spouse" },
+  child: { code: "DC", title: "Dependent Child — trade made by the member's dependent child" },
+};
+
+function ownerCode(owner: string): { code: string; title: string } {
+  const o = owner.toLowerCase().trim();
+  if (o.includes("spouse") || o === "sp") return OWNER_CODES.spouse;
+  if (o.includes("child") || o.includes("dependent") || o === "dc") return OWNER_CODES.child;
+  if (o.includes("joint") || o === "jt") return OWNER_CODES.joint;
+  return { code: owner.toUpperCase(), title: `Owner: ${owner}` };
+}
+
+/** Colorized owner pill (SP/JT/DC) for the Trader column — same color regardless of owner type. */
+function ownerPillHtml(owner: string): string {
+  const { code, title } = ownerCode(owner);
+  return `<span class="badge badge-indirect" title="${esc(title)}">${esc(code)}</span>`;
+}
+
+/** Composite key for matching an FMPTrade to its scored AnalyzedTrade counterpart. */
+export function tradeKey(trade: FMPTrade): string {
+  return [
+    trade.link ?? "",
+    trade.symbol ?? "",
+    trade.transactionDate ?? "",
+    trade.amount ?? "",
+    trade.type ?? "",
+    trade.owner ?? "",
+    trade.firstName ?? "",
+    trade.lastName ?? "",
+  ].join("|");
+}
+
+export function buildScoreLookup(report: AnalysisReport): Map<string, AnalyzedTrade> {
+  const lookup = new Map<string, AnalyzedTrade>();
+  for (const analyzed of report.scoredTrades) lookup.set(tradeKey(analyzed.trade), analyzed);
+  return lookup;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSV export
+// ─────────────────────────────────────────────────────────────────────────────
+
+function csvField(value: string | number): string {
+  const s = String(value ?? "");
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function csvRow(fields: Array<string | number>): string {
+  return fields.map(csvField).join(",");
+}
+
+function buildCsv(headers: string[], rows: Array<Array<string | number>>): string {
+  return [csvRow(headers), ...rows.map(csvRow)].join("\r\n");
+}
+
+const CARD_CSV_HEADERS = [
+  "Date", "Symbol", "Type", "Amount", "Chamber", "Trader", "Party",
+  "Score", "Flags", "Owner", "Asset Type", "Asset Description", "Filing Link",
+];
+
+function cardCsvRow(analyzed: AnalyzedTrade): Array<string | number> {
+  const { trade, trader, score } = analyzed;
+  const name = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
+  const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? trade.owner : "";
+  return [
+    trade.transactionDate ?? "",
+    trade.symbol ?? "",
+    typeLabel(trade.type),
+    trade.amount ?? "",
+    analyzed.chamber === "senate" ? "Senate" : "House",
+    name,
+    trader.party ?? "",
+    score.overallScore,
+    flagLabels(score.flags).join("; "),
+    owner,
+    assetTypeLabel(trade.assetType),
+    trade.assetDescription ?? "",
+    trade.link ?? "",
+  ];
+}
+
+const SALE_CSV_HEADERS = [
+  "Date", "Symbol", "Type", "Amount", "Trader", "Party", "Owner", "Options",
+  "Score", "Flags", "Asset Type", "Asset Description", "Filing Link",
+];
+
+function saleCsvRow(
+  trade: FMPTrade,
+  party: string | undefined,
+  analyzed: AnalyzedTrade | undefined
+): Array<string | number> {
+  const name = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
+  const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? trade.owner : "";
+  return [
+    trade.transactionDate ?? "",
+    trade.symbol ?? "",
+    typeLabel(trade.type),
+    trade.amount ?? "",
+    name,
+    party ?? "",
+    owner,
+    isOptionTrade(trade) ? "Yes" : "",
+    analyzed ? analyzed.score.overallScore : "",
+    analyzed ? flagLabels(analyzed.score.flags).join("; ") : "",
+    assetTypeLabel(trade.assetType),
+    trade.assetDescription ?? "",
+    trade.link ?? "",
+  ];
+}
+
+/** A section-header "Export CSV" button; the actual CSV text is embedded in the page's csv-data script. */
+function csvButtonHtml(sectionKey: string): string {
+  return `<button class="csv-btn" type="button" data-csv-section="${esc(sectionKey)}">⬇ CSV</button>`;
+}
+
+/** Embeds each section's pre-built CSV text as JSON, read by the shared export click-handler. */
+function csvDataScript(sections: Record<string, { filename: string; csv: string }>): string {
+  return `<script type="application/json" id="csv-data">${JSON.stringify(sections)
+    .replace(/</g, "\\u003c")}</script>`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -186,7 +399,7 @@ function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, strin
     }
   }
   if (score.flags.isDerivative && score.explanation.derivative) {
-    details.push(`<li>Asset type: ${esc(score.explanation.derivative.assetType)}</li>`);
+    details.push(`<li>Asset type: ${esc(assetTypeLabel(score.explanation.derivative.assetType))}</li>`);
   }
   if (score.flags.isIndirectOwnership && score.explanation.ownership) {
     details.push(`<li>Ownership: ${esc(score.explanation.ownership.owner)}</li>`);
@@ -227,7 +440,8 @@ function renderSaleRow(
   trade: FMPTrade,
   party: string | undefined,
   exchangeMap: Map<string, string>,
-  memberPageFiles?: Set<string>
+  memberPageFiles?: Set<string>,
+  scoreLookup?: Map<string, AnalyzedTrade>
 ): string {
   const rawSym = trade.symbol || "N/A";
   const sym = esc(rawSym);
@@ -243,19 +457,23 @@ function renderSaleRow(
   const nameHtml = memberUrl ? `<a href="${esc(memberUrl)}">${name}</a>` : name;
   const pLabel = partyLabel(party);
   const pClass = partyClass(party);
+  const pTitle = partyFullName(party);
   const amount = esc(formatAmount(trade.amount));
   const date = esc(trade.transactionDate || "");
   const desc = esc(trade.assetDescription || "");
-  const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? esc(trade.owner) : "";
+  const ownerRaw = trade.owner && trade.owner.toLowerCase() !== "self" ? trade.owner : "";
+  const ownerPill = ownerRaw ? ownerPillHtml(ownerRaw) : "";
   const filingLink = filingLinkHtml(trade);
-  const optionTag = optionTagHtml(trade);
+  const derivativeBadge = derivativeBadgeHtml(trade);
+  const analyzed = scoreLookup?.get(tradeKey(trade));
+  const flagBadges = analyzed ? traderBadgesHtml(analyzed.score) : "";
 
   return `
 <tr>
   <td class="sale-date">${date}</td>
-  <td class="sale-sym">${symCell}${optionTag ? ` ${optionTag}` : ""}</td>
+  <td class="sale-sym">${symCell}</td>
   <td class="sale-amount">${amount}</td>
-  <td class="sale-trader">${nameHtml}${pLabel ? ` <span class="party-tag ${pClass}">${pLabel}</span>` : ""}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}</td>
+  <td class="sale-trader"><div class="trader-cell">${nameHtml}${pLabel ? ` <span class="party-tag ${pClass}" title="${esc(pTitle)}">${pLabel}</span>` : ""}${flagBadges}${derivativeBadge ? ` ${derivativeBadge}` : ""}${ownerPill ? ` ${ownerPill}` : ""}</div></td>
   <td class="sale-desc">${desc}${filingLink ? ` ${filingLink}` : ""}</td>
 </tr>`;
 }
@@ -438,6 +656,7 @@ const CSS = `
     font-weight: 700;
     padding: 0.1rem 0.4rem;
     border-radius: 4px;
+    cursor: help;
   }
   .party-r { background: rgba(243,139,168,0.2); color: var(--party-r); }
   .party-d { background: rgba(137,180,250,0.2); color: var(--party-d); }
@@ -460,7 +679,7 @@ const CSS = `
     text-transform: uppercase;
     letter-spacing: 0.04em;
     position: relative;
-    cursor: default;
+    cursor: help;
   }
   /* CSS tooltip shown on hover (supplements native title attr) */
   .badge::after {
@@ -541,10 +760,36 @@ const CSS = `
   .sale-date  { white-space: nowrap; color: var(--subtext); width: 7rem; }
   .sale-sym   { font-weight: 700; color: var(--accent); width: 5rem; }
   .sale-amount { white-space: nowrap; color: var(--subtext); }
-  .sale-trader { white-space: nowrap; }
+  .sale-trader { min-width: 10rem; }
+  .trader-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 0.3rem; }
   .sale-desc  { color: var(--muted); font-size: 0.75rem; }
-  .owner-tag  { font-size: 0.65rem; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.25rem; }
+  .owner-tag  {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--muted);
+    background: rgba(108,112,134,0.2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.05rem 0.35rem;
+    cursor: help;
+  }
   .option-tag { font-size: 0.65rem; color: var(--teal); border: 1px solid var(--teal); border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.35rem; font-weight: 600; }
+
+  /* CSV export buttons */
+  .csv-btn {
+    margin-left: auto;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.25rem 0.6rem;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
+  }
+  .csv-btn:hover { background: var(--border); color: var(--accent); }
 
   /* Footer */
   footer {
@@ -648,6 +893,27 @@ const JS = `
   var savedTab = (function(){ try { return localStorage.getItem('congress-tab'); } catch(e){ return null; } })();
   var firstTab = tabBtns.length ? tabBtns[0].dataset.tab : null;
   activateTab(savedTab && document.getElementById(savedTab) ? savedTab : firstTab);
+
+  // CSV export
+  var csvDataEl = document.getElementById('csv-data');
+  var csvData = null;
+  if (csvDataEl) { try { csvData = JSON.parse(csvDataEl.textContent); } catch (e) { csvData = null; } }
+  document.querySelectorAll('[data-csv-section]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (!csvData) return;
+      var entry = csvData[btn.dataset.csvSection];
+      if (!entry) return;
+      var blob = new Blob([entry.csv], { type: 'text/csv;charset=utf-8;' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = entry.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    });
+  });
 })();
 `;
 
@@ -671,6 +937,8 @@ export interface HtmlReportOptions {
   partyPageUrls?: { republican?: string; democrat?: string; independent?: string };
   /** Set of member page filenames that exist (relative to this report's location) */
   memberPageFiles?: Set<string>;
+  /** ISO date (YYYY-MM-DD) used to name exported CSV files */
+  dateStr?: string;
 }
 
 /** Compute the filename key for a member name (same formula used in report-html.ts) */
@@ -684,7 +952,10 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     exchangeMap = new Map(),
     partyPageUrls,
     memberPageFiles,
+    dateStr = new Date(report.generatedAt).toISOString().split("T")[0],
   } = opts;
+
+  const scoreLookup = buildScoreLookup(report);
 
   // Top purchases (score >= 40, sorted by score desc)
   const topPurchases = [...report.scoredTrades]
@@ -697,6 +968,13 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
 
   // Committee-relevant trades (any type)
   const committeeRelevant = report.summary.byCommitteeRelevance.slice(0, 20);
+
+  const csvSections = {
+    "top-purchases": { filename: `top-purchases-${dateStr}.csv`, csv: buildCsv(CARD_CSV_HEADERS, topPurchases.map(cardCsvRow)) },
+    "committee-relevant": { filename: `committee-relevant-${dateStr}.csv`, csv: buildCsv(CARD_CSV_HEADERS, committeeRelevant.map(cardCsvRow)) },
+    "recent-purchases": { filename: `recent-purchases-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, purchaseTrades.map(({ trade, party }) => saleCsvRow(trade, party, scoreLookup.get(tradeKey(trade))))) },
+    "recent-sales": { filename: `recent-sales-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, salesTrades.map(({ trade, party }) => saleCsvRow(trade, party, scoreLookup.get(tradeKey(trade))))) },
+  };
 
   const dateRange = (() => {
     const dates = report.scoredTrades
@@ -772,6 +1050,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
       <div class="section-header">
         <h2 class="section-title">Top Purchases by Uniqueness Score</h2>
         <span class="section-count">${topPurchases.length} trades</span>
+        ${csvButtonHtml("top-purchases")}
       </div>
       <div class="card-grid">
         ${topPurchases.map((t) => renderTradeCard(t, exchangeMap, memberPageFiles)).join("\n        ")}
@@ -786,6 +1065,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
       <div class="section-header">
         <h2 class="section-title">Committee-Relevant Trades</h2>
         <span class="section-count">${committeeRelevant.length} trades — traders with committee oversight of the stock's sector</span>
+        ${csvButtonHtml("committee-relevant")}
       </div>
       <div class="card-grid">
         ${committeeRelevant.map((t) => renderTradeCard(t, exchangeMap, memberPageFiles)).join("\n        ")}
@@ -800,12 +1080,13 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
       <div class="section-header">
         <h2 class="section-title">Recent Purchases</h2>
         <span class="section-count">${purchaseTrades.length} trades</span>
+        ${csvButtonHtml("recent-purchases")}
       </div>
       <div class="sales-table-wrap">
         <table>
           <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
           <tbody>
-            ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles)).join("\n            ")}
+            ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles, scoreLookup)).join("\n            ")}
           </tbody>
         </table>
       </div>
@@ -818,12 +1099,13 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
       <div class="section-header">
         <h2 class="section-title">Recent Sales</h2>
         <span class="section-count">${salesTrades.length} trades</span>
+        ${csvButtonHtml("recent-sales")}
       </div>
       <div class="sales-table-wrap">
         <table>
           <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
           <tbody>
-            ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles)).join("\n            ")}
+            ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles, scoreLookup)).join("\n            ")}
           </tbody>
         </table>
       </div>
@@ -836,6 +1118,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
   Scores reflect uniqueness signals; not investment advice.
 </footer>
 
+${csvDataScript(csvSections)}
 <script>${JS}</script>
 </body>
 </html>`;
@@ -855,10 +1138,16 @@ export interface MemberPageOptions {
   indexUrl?: string;
   exchangeMap?: Map<string, string>;
   memberPageFiles?: Set<string>;
+  scoreLookup?: Map<string, AnalyzedTrade>;
+  dateStr?: string;
 }
 
 export function buildMemberPage(opts: MemberPageOptions): string {
-  const { memberName, chamber, party, trades, dateLabel, reportUrl, indexUrl, exchangeMap = new Map(), memberPageFiles } = opts;
+  const {
+    memberName, chamber, party, trades, dateLabel, reportUrl, indexUrl,
+    exchangeMap = new Map(), memberPageFiles, scoreLookup,
+    dateStr = new Date().toISOString().split("T")[0],
+  } = opts;
 
   const purchases = trades
     .filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
@@ -867,19 +1156,26 @@ export function buildMemberPage(opts: MemberPageOptions): string {
 
   const pLabel = partyLabel(party);
   const pClass = partyClass(party);
+  const memberSlug = memberKey(memberName);
 
   const navLinks = [
     indexUrl ? `<a href="${esc(indexUrl)}">← Archive</a>` : "",
     `<a href="${esc(reportUrl)}">← Report</a>`,
   ].filter(Boolean).join(" &nbsp;·&nbsp; ");
 
-  function tradeTable(rows: typeof trades, title: string): string {
+  const csvSections = {
+    [`${memberSlug}-purchases`]: { filename: `${memberSlug}-purchases-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, purchases.map(({ trade, party: p }) => saleCsvRow(trade, p, scoreLookup?.get(tradeKey(trade))))) },
+    [`${memberSlug}-sales`]: { filename: `${memberSlug}-sales-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, sales.map(({ trade, party: p }) => saleCsvRow(trade, p, scoreLookup?.get(tradeKey(trade))))) },
+  };
+
+  function tradeTable(rows: typeof trades, title: string, csvKey: string): string {
     if (!rows.length) return "";
     return `
   <section class="section">
     <div class="section-header">
       <h2 class="section-title">${esc(title)}</h2>
       <span class="section-count">${rows.length} trades</span>
+      ${csvButtonHtml(csvKey)}
     </div>
     <div class="sales-table-wrap">
       <table>
@@ -942,12 +1238,13 @@ export function buildMemberPage(opts: MemberPageOptions): string {
     <span class="stat-sep">·</span>
     <span class="stat-item"><strong>${trades.length}</strong> total</span>
   </div>
-  ${tradeTable(purchases, "Purchases")}
-  ${tradeTable(sales, "Sales")}
+  ${tradeTable(purchases, "Purchases", `${memberSlug}-purchases`)}
+  ${tradeTable(sales, "Sales", `${memberSlug}-sales`)}
 </main>
 <footer>
   Scores reflect uniqueness signals; not investment advice.
 </footer>
+${csvDataScript(csvSections)}
 <script>${JS}</script>
 </body>
 </html>`;
@@ -965,10 +1262,16 @@ export interface PartyPageOptions {
   indexUrl?: string;
   exchangeMap?: Map<string, string>;
   memberPageFiles?: Set<string>;
+  scoreLookup?: Map<string, AnalyzedTrade>;
+  dateStr?: string;
 }
 
 export function buildPartyPage(opts: PartyPageOptions): string {
-  const { partyLabel, trades, dateLabel, reportUrl, indexUrl, exchangeMap = new Map(), memberPageFiles } = opts;
+  const {
+    partyLabel, trades, dateLabel, reportUrl, indexUrl,
+    exchangeMap = new Map(), memberPageFiles, scoreLookup,
+    dateStr = new Date().toISOString().split("T")[0],
+  } = opts;
 
   const purchases = trades
     .filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
@@ -980,19 +1283,26 @@ export function buildPartyPage(opts: PartyPageOptions): string {
     `<a href="${esc(reportUrl)}">← Report</a>`,
   ].filter(Boolean).join(" &nbsp;·&nbsp; ");
 
-  function tradeTable(rows: typeof trades, title: string): string {
+  const partySlug = partyLabel.toLowerCase();
+  const csvSections = {
+    [`${partySlug}-purchases`]: { filename: `${partySlug}-purchases-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, purchases.map(({ trade, party }) => saleCsvRow(trade, party, scoreLookup?.get(tradeKey(trade))))) },
+    [`${partySlug}-sales`]: { filename: `${partySlug}-sales-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, sales.map(({ trade, party }) => saleCsvRow(trade, party, scoreLookup?.get(tradeKey(trade))))) },
+  };
+
+  function tradeTable(rows: typeof trades, title: string, csvKey: string): string {
     if (!rows.length) return "";
     return `
   <section class="section">
     <div class="section-header">
       <h2 class="section-title">${esc(title)}</h2>
       <span class="section-count">${rows.length} trades</span>
+      ${csvButtonHtml(csvKey)}
     </div>
     <div class="sales-table-wrap">
       <table>
         <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
         <tbody>
-          ${rows.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles)).join("\n          ")}
+          ${rows.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberPageFiles, scoreLookup)).join("\n          ")}
         </tbody>
       </table>
     </div>
@@ -1028,12 +1338,13 @@ export function buildPartyPage(opts: PartyPageOptions): string {
     <span class="stat-sep">·</span>
     <span class="stat-item"><strong>${trades.length}</strong> total</span>
   </div>
-  ${tradeTable(purchases, "Purchases")}
-  ${tradeTable(sales, "Sales")}
+  ${tradeTable(purchases, "Purchases", `${partySlug}-purchases`)}
+  ${tradeTable(sales, "Sales", `${partySlug}-sales`)}
 </main>
 <footer>
   Scores reflect uniqueness signals; not investment advice.
 </footer>
+${csvDataScript(csvSections)}
 <script>${JS}</script>
 </body>
 </html>`;

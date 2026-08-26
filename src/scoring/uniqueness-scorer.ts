@@ -252,13 +252,15 @@ function scoreOwnership(trade: TradeInput): number {
     return 0;
   }
 
-  const owner = trade.owner.toLowerCase();
+  const owner = trade.owner.toLowerCase().trim();
 
-  if (owner.includes("spouse")) {
+  // House PTRs frequently abbreviate the owner field (SP/JT/DC) instead of
+  // spelling it out the way Senate eFD filings do (Spouse/Joint/Dependent).
+  if (owner.includes("spouse") || owner === "sp") {
     return 75; // Spouse trades
-  } else if (owner.includes("child") || owner.includes("dependent")) {
+  } else if (owner.includes("child") || owner.includes("dependent") || owner === "dc") {
     return 100; // Child/dependent trades
-  } else if (owner.includes("joint")) {
+  } else if (owner.includes("joint") || owner === "jt") {
     return 25; // Joint ownership
   } else {
     return 0; // Self
