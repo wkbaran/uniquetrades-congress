@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__AbletonMCP__get_track_info",
+      "mcp__AbletonMCP__get_device_parameters",
+      "mcp__AbletonMCP__get_browser_items_at_path"
+    ]
+  }
+}

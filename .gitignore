@@ -9,6 +9,7 @@ dist/
 /output/
 /test-results/
 /report-output/
+.claude/worktrees
 ..*
 .*~
 .*.sw*
