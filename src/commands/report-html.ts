@@ -32,16 +32,20 @@ import type { FMPTrade } from "../types/index.js";
 
 const DEFAULT_WEB_DIR = "output/web";
 
+function formatDate(date: Date): string {
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 function weekLabel(date: Date): string {
   const d = new Date(date);
   const day = d.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + diff);
-  return d.toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
+  return formatDate(d);
 }
 
 /** Load exchange info from the market data cache (populated by --market-data runs). */
@@ -205,6 +209,7 @@ export const reportHtmlCommand = new Command("report:html")
       const now = new Date();
       const dateStr = now.toISOString().split("T")[0];
       const label = `Week of ${weekLabel(now)}`;
+      const runDateLabel = formatDate(now);
 
       const dateDir = path.join(webDir, dateStr);
       await fs.mkdir(dateDir, { recursive: true });
@@ -322,7 +327,7 @@ export const reportHtmlCommand = new Command("report:html")
       // ── Update manifest + rebuild index ──────────────────────────────────
       const manifest = await upsertManifest(webDir, {
         date: dateStr,
-        dateLabel: label,
+        dateLabel: runDateLabel,
         file: reportRelPath,
         totalTrades: report.totalTradesAnalyzed,
         topSymbols,

@@ -3,7 +3,7 @@ import * as path from "path";
 
 export interface ReportManifestEntry {
   date: string;        // ISO date string, e.g. "2026-04-18"
-  dateLabel: string;   // Human-readable, e.g. "Week of April 13, 2026"
+  dateLabel: string;   // Human-readable date the report ran, e.g. "April 13, 2026"
   file: string;        // Relative filename, e.g. "report-2026-04-18.html"
   totalTrades: number;
   topSymbols: string[]; // Up to 8 top symbols as preview
