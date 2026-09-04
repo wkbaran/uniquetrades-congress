@@ -15,7 +15,12 @@ export function getDefaultTargetDate(): Date {
 }
 
 /**
- * Generate a unique key for a trade to detect duplicates
+ * Generate a unique key for a trade to detect duplicates.
+ *
+ * Includes assetDescription because symbol-less trades (e.g. government
+ * securities/bonds) can otherwise collide: the same member can legitimately
+ * buy two different bonds on the same date, for the same amount range and
+ * owner, that would look identical without the description.
  */
 export function getTradeKey(trade: FMPTrade): string {
   return [
@@ -26,6 +31,7 @@ export function getTradeKey(trade: FMPTrade): string {
     trade.type || "",
     trade.amount || "",
     trade.owner || "",
+    trade.assetDescription || "",
   ].join("|");
 }
 
@@ -47,14 +53,23 @@ function getMostRecentTradeDate(trades: FMPTrade[]): Date | null {
 }
 
 /**
- * Merge new trades with existing trades, removing duplicates
+ * Merge new trades with existing trades, removing duplicates.
+ *
+ * Dedupes against existing trades AND within newTrades itself — a single
+ * source fetch/parse can emit the same line item more than once (e.g. a
+ * PDF table row parsed twice), and since that happens within one batch,
+ * checking only against previously-seen trades would let both copies through.
  */
 function mergeTrades(existing: FMPTrade[], newTrades: FMPTrade[]): FMPTrade[] {
-  const existingKeys = new Set(existing.map(getTradeKey));
-  const uniqueNewTrades = newTrades.filter((trade) => {
+  const seenKeys = new Set(existing.map(getTradeKey));
+  const uniqueNewTrades: FMPTrade[] = [];
+
+  for (const trade of newTrades) {
     const key = getTradeKey(trade);
-    return !existingKeys.has(key);
-  });
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    uniqueNewTrades.push(trade);
+  }
 
   return [...existing, ...uniqueNewTrades];
 }

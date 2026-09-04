@@ -939,6 +939,8 @@ export interface HtmlReportOptions {
   memberPageFiles?: Set<string>;
   /** ISO date (YYYY-MM-DD) used to name exported CSV files */
   dateStr?: string;
+  /** How many days back from generation time to look when ranking Top Purchases / Committee-Relevant (default 30) */
+  topWindowDays?: number;
 }
 
 /** Compute the filename key for a member name (same formula used in report-html.ts) */
@@ -953,21 +955,36 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     partyPageUrls,
     memberPageFiles,
     dateStr = new Date(report.generatedAt).toISOString().split("T")[0],
+    topWindowDays = 30,
   } = opts;
 
   const scoreLookup = buildScoreLookup(report);
 
-  // Top purchases (score >= 40, sorted by score desc)
+  // Only rank trades from the last `topWindowDays` days (relative to report generation)
+  // for Top Purchases / Committee-Relevant, so these stay current instead of surfacing
+  // the same all-time high scorers indefinitely.
+  const windowCutoff = new Date(report.generatedAt);
+  windowCutoff.setDate(windowCutoff.getDate() - topWindowDays);
+  const isWithinWindow = (t: AnalyzedTrade): boolean => {
+    if (!t.trade.transactionDate) return false;
+    const d = new Date(t.trade.transactionDate);
+    return !isNaN(d.getTime()) && d >= windowCutoff;
+  };
+
+  // Top purchases (sorted by score desc, within the recency window)
   const topPurchases = [...report.scoredTrades]
     .filter((t) => {
       const type = (t.trade.type || "").toLowerCase();
-      return type.includes("purchase") || type.includes("exchange");
+      return (type.includes("purchase") || type.includes("exchange")) && isWithinWindow(t);
     })
     .sort((a, b) => b.score.overallScore - a.score.overallScore)
     .slice(0, 30);
 
-  // Committee-relevant trades (any type)
-  const committeeRelevant = report.summary.byCommitteeRelevance.slice(0, 20);
+  // Committee-relevant trades (any type, within the recency window)
+  const committeeRelevant = [...report.scoredTrades]
+    .filter((t) => t.score.flags.hasCommitteeRelevance && isWithinWindow(t))
+    .sort((a, b) => b.score.factors.committeeRelevanceScore - a.score.factors.committeeRelevanceScore)
+    .slice(0, 20);
 
   const csvSections = {
     "top-purchases": { filename: `top-purchases-${dateStr}.csv`, csv: buildCsv(CARD_CSV_HEADERS, topPurchases.map(cardCsvRow)) },
@@ -1049,7 +1066,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     <section class="section">
       <div class="section-header">
         <h2 class="section-title">Top Purchases by Uniqueness Score</h2>
-        <span class="section-count">${topPurchases.length} trades</span>
+        <span class="section-count">${topPurchases.length} trades — last ${topWindowDays} days</span>
         ${csvButtonHtml("top-purchases")}
       </div>
       <div class="card-grid">
@@ -1064,7 +1081,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     <section class="section">
       <div class="section-header">
         <h2 class="section-title">Committee-Relevant Trades</h2>
-        <span class="section-count">${committeeRelevant.length} trades — traders with committee oversight of the stock's sector</span>
+        <span class="section-count">${committeeRelevant.length} trades — traders with committee oversight of the stock's sector, last ${topWindowDays} days</span>
         ${csvButtonHtml("committee-relevant")}
       </div>
       <div class="card-grid">
