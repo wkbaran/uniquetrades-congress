@@ -98,10 +98,25 @@ function toTradeInput(trade: FMPTrade): TradeInput {
 }
 
 /**
+ * Strip middle initials (e.g. "David J." -> "david") so a member whose disclosure
+ * forms inconsistently include a middle initial still groups into one trader
+ * history — otherwise their trade history/conviction scoring silently fragments
+ * across "david-taylor" and "david-j.-taylor" buckets.
+ */
+export function normalizeFirstName(first: string): string {
+  const parts = first
+    .toLowerCase()
+    .trim()
+    .split(/\s+/)
+    .filter((part) => !/^[a-z]\.?$/.test(part));
+  return parts.length > 0 ? parts.join(" ") : first.toLowerCase().trim();
+}
+
+/**
  * Create trader ID from trade
  */
 function getTraderId(trade: FMPTrade, chamber: "senate" | "house"): string {
-  const first = (trade.firstName || "").toLowerCase().trim();
+  const first = normalizeFirstName(trade.firstName || "");
   const last = (trade.lastName || "").toLowerCase().trim();
   return `${chamber}-${first}-${last}`;
 }

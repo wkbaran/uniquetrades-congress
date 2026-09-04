@@ -32,6 +32,16 @@ import type { FMPTrade } from "../types/index.js";
 
 const DEFAULT_WEB_DIR = "output/web";
 
+/**
+ * Strip middle initials (e.g. "David J." -> "David") so a member whose disclosure
+ * forms inconsistently include a middle initial still gets one member page instead
+ * of splitting across "David Taylor" and "David J. Taylor".
+ */
+function stripMiddleInitial(first: string): string {
+  const parts = first.trim().split(/\s+/).filter((part) => !/^[a-zA-Z]\.?$/.test(part));
+  return parts.length > 0 ? parts.join(" ") : first.trim();
+}
+
 function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", {
     month: "long",
@@ -75,6 +85,7 @@ export const reportHtmlCommand = new Command("report:html")
   .option("--render-only", "Re-render HTML from the last saved analysis without re-fetching or re-analyzing")
   .option("--rebuild-index", "Rebuild index.html from the manifest (prunes deleted reports) without generating a new report")
   .option("--skip-unchanged", "Skip generating and publishing if fetching found no new trades since the last run (for scheduled/automated runs)")
+  .option("--top-window-days <days>", "Only rank trades from this many days back for Top Purchases / Committee-Relevant", "30")
   .option("--publish", "Sync output/web to S3 and invalidate CloudFront after generating")
   .option("--bucket <name>", "S3 bucket name (or set S3_BUCKET env var)")
   .option("--region <region>", "AWS region (default: us-east-1 or AWS_REGION env var)")
@@ -83,6 +94,12 @@ export const reportHtmlCommand = new Command("report:html")
     try {
       const webDir = path.resolve(process.cwd(), options.out as string);
       await fs.mkdir(webDir, { recursive: true });
+
+      const topWindowDays = parseInt(options.topWindowDays as string, 10);
+      if (isNaN(topWindowDays) || topWindowDays <= 0) {
+        console.error(`❌ --top-window-days must be a positive integer (got "${options.topWindowDays}")`);
+        process.exit(1);
+      }
 
       // ── Rebuild-index-only shortcut ──────────────────────────────────────
       if (options.rebuildIndex) {
@@ -239,11 +256,11 @@ export const reportHtmlCommand = new Command("report:html")
       for (const item of allPartyTrades) {
         const { trade } = item;
         if (!trade.firstName && !trade.lastName) continue;
-        const name = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
+        const name = `${stripMiddleInitial(trade.firstName ?? "")} ${trade.lastName ?? ""}`.trim();
         const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
         if (!memberMap.has(key)) {
           const chamber = report.scoredTrades.find(
-            (t) => `${t.trade.firstName ?? ""} ${t.trade.lastName ?? ""}`.trim() === name
+            (t) => `${stripMiddleInitial(t.trade.firstName ?? "")} ${t.trade.lastName ?? ""}`.trim() === name
           )?.chamber === "senate" ? "Sen." : "Rep.";
           memberMap.set(key, { name, chamber, party: item.party, trades: [] });
         }
@@ -319,6 +336,7 @@ export const reportHtmlCommand = new Command("report:html")
         partyPageUrls,
         memberPageFiles,
         dateStr,
+        topWindowDays,
       });
 
       await fs.writeFile(path.join(dateDir, reportFile), html, "utf-8");

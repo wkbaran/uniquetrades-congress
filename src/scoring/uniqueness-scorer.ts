@@ -183,6 +183,15 @@ function scoreRarity(
 /**
  * Score based on committee relevance - trading in sectors you regulate = higher score
  * Uses FMP sector/industry data from MarketData
+ *
+ * Weights each overlapping committee by specificity rather than just counting
+ * committees. A committee whose entire jurisdiction is one sector (e.g. Transportation
+ * and Infrastructure -> Industrials) is a far more direct conflict-of-interest signal
+ * than a committee that happens to list the stock's sector among several unrelated
+ * ones (e.g. Judiciary -> Technology, Communication Services) — so two overlaps from
+ * broad committees no longer automatically outrank one overlap from a narrow one.
+ * A match on the stock's specific FMP industry (not just its broad sector) is treated
+ * as maximally specific, since the committee's jurisdiction named that exact industry.
  */
 function scoreCommitteeRelevance(
   trader: TraderInput,
@@ -201,20 +210,26 @@ function scoreCommitteeRelevance(
     return 0;
   }
 
-  // Count how many of the trader's committees have jurisdiction
-  let overlappingCommittees = 0;
+  let relevanceWeight = 0;
   for (const committeeId of trader.committees) {
-    if (sectorMap.hasOverlap(committeeId, sector, industry)) {
-      overlappingCommittees++;
+    const committeeSectors = sectorMap.getCommitteeSectors(committeeId);
+    const committeeIndustries = sectorMap.getCommitteeIndustries(committeeId);
+    const industryMatch = !!industry && committeeIndustries.includes(industry);
+    const sectorMatch = !!sector && committeeSectors.includes(sector);
+
+    if (industryMatch) {
+      relevanceWeight += 1;
+    } else if (sectorMatch) {
+      relevanceWeight += 1 / Math.max(1, committeeSectors.length);
     }
   }
 
-  if (overlappingCommittees === 0) {
+  if (relevanceWeight <= 0) {
     return 0;
-  } else if (overlappingCommittees >= 2) {
-    return 100; // Multiple committee overlaps
+  } else if (relevanceWeight >= 1) {
+    return 100; // A full committee's worth of specific, targeted overlap
   } else {
-    return 75; // Single committee overlap
+    return 75; // Some relevance, but diluted across a broader committee mandate
   }
 }
 
