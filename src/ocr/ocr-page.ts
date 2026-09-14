@@ -3,6 +3,8 @@
  * validate the result. Validation is strict on purpose: a row only becomes a trade
  * when its date, amount range, and transaction type all normalize to known values.
  */
+import * as http from "http";
+import * as https from "https";
 import { extractTickerFromDescription } from "../data/ticker-extract.js";
 
 export type FormKind = "house" | "senate";
@@ -261,29 +263,94 @@ export interface PageOcr {
   error?: string;
 }
 
+/**
+ * POST to Ollama's chat API and collect the streamed `message.content`. Uses node:http
+ * rather than fetch, which aborts when response headers take over 5 minutes: Ollama sends
+ * no headers until it starts on a request, and a request queued behind another model on a
+ * shared GPU can wait longer than that. Only the overall timeout applies here.
+ */
+function ollamaChat(url: string, body: unknown, timeoutMs: number): Promise<{ status: number; content: string; errorText: string }> {
+  return new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const payload = Buffer.from(JSON.stringify(body));
+    const client = target.protocol === "https:" ? https : http;
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
+    const req = client.request(
+      target,
+      { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": payload.length } },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        let buffered = "";
+        let content = "";
+        let errorText = "";
+        // Newline-delimited JSON chunks; non-200 bodies are kept as error text
+        const take = (line: string) => {
+          if (!line.trim()) return;
+          if (status !== 200) {
+            errorText += line;
+            return;
+          }
+          const chunk = JSON.parse(line) as { message?: { content?: string }; error?: string };
+          if (chunk.error) throw new Error(`Ollama: ${chunk.error}`);
+          content += chunk.message?.content ?? "";
+        };
+
+        res.setEncoding("utf8");
+        res.on("data", (part: string) => {
+          buffered += part;
+          const lines = buffered.split("\n");
+          buffered = lines.pop() ?? "";
+          try {
+            lines.forEach(take);
+          } catch (err) {
+            req.destroy(err as Error);
+          }
+        });
+        res.on("end", () => {
+          try {
+            take(buffered);
+            finish(() => resolve({ status, content, errorText }));
+          } catch (err) {
+            finish(() => reject(err));
+          }
+        });
+        res.on("error", (err) => finish(() => reject(err)));
+      }
+    );
+
+    const timer = setTimeout(() => req.destroy(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    req.on("error", (err) => finish(() => reject(err)));
+    req.end(payload);
+  });
+}
+
 export async function ocrPage(png: Buffer, form: FormKind, opts: OcrOptions): Promise<PageOcr> {
   const started = Date.now();
   const seconds = () => Math.round((Date.now() - started) / 100) / 10;
 
   try {
-    const resp = await fetch(`${opts.url}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    const { status, content: raw, errorText } = await ollamaChat(
+      `${opts.url}/api/chat`,
+      {
         model: opts.model,
-        stream: false,
+        stream: true,
         think: false,
         keep_alive: "15m",
         options: { temperature: 0, num_ctx: 16384 },
         messages: [{ role: "user", content: PROMPTS[form], images: [png.toString("base64")] }],
-      }),
-      signal: AbortSignal.timeout(opts.timeoutMs),
-    });
-    if (!resp.ok) {
-      return { readable: false, rows: [], raw: "", seconds: seconds(), error: `Ollama HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}` };
+      },
+      opts.timeoutMs
+    );
+    if (status !== 200) {
+      return { readable: false, rows: [], raw: "", seconds: seconds(), error: `Ollama HTTP ${status}: ${errorText.slice(0, 200)}` };
     }
-    const body = (await resp.json()) as { message?: { content?: string } };
-    const raw = body.message?.content ?? "";
     const parsed = parseModelResponse(raw);
     if (!parsed) return { readable: false, rows: [], raw, seconds: seconds(), error: "model response was not valid JSON" };
     return { ...parsed, raw, seconds: seconds() };
