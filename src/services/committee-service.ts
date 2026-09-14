@@ -313,6 +313,8 @@ const NICKNAMES: string[][] = [
   ["katherine", "kate", "kathy", "katie"], ["nicholas", "nick"], ["jonathan", "jon"],
   ["steven", "steve"], ["stephen", "steve"], ["charles", "chuck", "chip"],
   ["theodore", "ted"], ["frederick", "fred"], ["patrick", "pat"], ["anthony", "tony"],
+  // Scanned PTRs list "Rohit Khanna"; the legislators data only knows "Ro"
+  ["rohit", "ro"],
 ];
 
 /** Lowercase, strip accents/punctuation, and drop initials, honorifics and suffixes. */
