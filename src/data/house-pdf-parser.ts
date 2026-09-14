@@ -538,9 +538,10 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
       i++; continue;
     }
 
-    // Check if this looks like an asset description (substantial text, not a date/amount/ticker)
+    // Check if this looks like an asset description (substantial text, not a date/amount/ticker).
+    // Short names ("usdc", "xAI") count too when an asset type code ("[CT]") follows them.
     if (
-      block.length > 5 &&
+      (block.length > 5 || (block.length >= 2 && assetTypeRe.test(mergedBlocks[i + 1] ?? ""))) &&
       !dateRe.test(block) &&
       !amountRe.test(block) &&
       !tickerRe.test(block) &&
@@ -556,6 +557,12 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
       let j = i + 1;
       while (j < mergedBlocks.length) {
         const next = mergedBlocks[j];
+
+        // A short asset name followed by its type code ("usdc" + "[CT]") starts the next
+        // row once this one has its date or amount; longer names already end the row below.
+        if ((tx.transactionDate || tx.amount) && next.length >= 2 && next.length <= 5 &&
+            !dateRe.test(next) && !amountRe.test(next) && !txnTypeOf(next) && !tickerRe.test(next) &&
+            assetTypeRe.test(mergedBlocks[j + 1] ?? "")) break;
 
         const tickM = next.match(/^\(([A-Z0-9.^-]+)\)$/);
         if (tickM) { tx.ticker = tickM[1]; j++; continue; }
