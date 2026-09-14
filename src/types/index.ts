@@ -167,6 +167,8 @@ export const FMPTradeSchema = z.object({
   amount: z.string().optional(),
   comment: z.string().optional(),
   symbol: z.string().optional(),
+  // "ocr" when transcribed by a vision model from a scanned filing
+  source: z.string().optional(),
 });
 
 export type FMPTrade = z.infer<typeof FMPTradeSchema>;

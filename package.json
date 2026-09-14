@@ -12,7 +12,8 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "playwright test"
+    "test": "playwright test",
+    "ocr:catchup": "node --env-file-if-exists=.env dist/index.js ocr:catchup"
   },
   "keywords": [
     "congress",
@@ -26,6 +27,7 @@
     "@aws-sdk/client-s3": "^3.0.0",
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
+    "mupdf": "^1.28.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

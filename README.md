@@ -449,6 +449,43 @@ Set-ScheduledTask `
   -Settings $settings
 ```
 
+## Scanned Filings (OCR)
+
+Some members file PTRs on paper: the House publishes them as image-only PDFs, and the Senate as "paper filings" made of scanned GIF pages. Neither has machine-readable text, so each fetch records them in `data/unparseable-filings.json`, and an OCR step transcribes them with a local [Ollama](https://ollama.com) vision model (default `qwen3.6:27b`, which read test pages with every field correct).
+
+How a filing is processed:
+
+1. Each page is rendered to PNG with MuPDF. Pages scanned sideways (portrait for the landscape House form, or the reverse for the Senate form) are rotated first, because the model reads a sideways page into confident but wrong rows.
+2. The model returns rows as JSON. A row becomes a trade only if its transaction date, amount range, and purchase/sale type all normalize to known values; account header rows are skipped.
+3. A page is trusted when at least 80% of its rows validate. Rows from pages below that are withheld and the page is flagged for review.
+4. Validated rows are stored with `source: "ocr"` and shown with an **OCR** badge in the report. A cleanly OCR'd filing replaces any rows stored for it; a filing with pages needing review only adds rows when nothing is stored for it yet.
+
+Only House filings are OCR'd by default (`OCR_CHAMBERS=house`). On hand-checked test pages the House form was transcribed with every field correct (51 of 51 rows), but a Senate paper page had 3 of 10 rows wrong (amount column and purchase/sale misread), so Senate paper filings stay on the review list until a model reads that form reliably. Pass `--chamber senate` or `--filing <id>` to the catch-up command to OCR them anyway, e.g. to test a new model.
+
+Structured output is deliberately not used: constraining the model with Ollama's JSON-schema `format` made it misread the amount column on 10 of 25 rows of a test page.
+
+### Daily run
+
+`report:html` runs OCR after fetching, for scanned filings not yet attempted, up to `OCR_DAILY_MAX_PAGES` pages (default 60). Larger filings are deferred to the catch-up command. Pass `--no-ocr` to skip it.
+
+### Catch-up and review
+
+```powershell
+.\ocr-catchup.ps1 --list                 # what would be processed
+.\ocr-catchup.ps1                        # everything not yet OCR'd (long-running: ~100s per page)
+.\ocr-catchup.ps1 --limit 5              # a few filings at a time
+.\ocr-catchup.ps1 --filing 9115726       # one filing
+.\ocr-catchup.ps1 --retry                # re-run filings that failed or have pages needing review
+```
+
+Each run writes `logs\ocr-catchup-<timestamp>.log`: one line per page (status, rotation, valid/rejected rows, time) plus every rejected row and why, and a closing summary listing pages to review. For every page, `logs\ocr\<chamber>-<id>\page-N.json` holds the raw model output and validation; pages needing review also get `page-N.png`. Per-filing outcomes are kept in `data/ocr-results.json`.
+
+After a catch-up, regenerate and publish to include the merged trades:
+
+```bash
+node dist/index.js report:html --no-fetch-trades --publish
+```
+
 ## Disclaimer
 
 This tool is for informational and educational purposes only. It does not constitute investment advice. Congressional trading data is publicly available but may be delayed. Always do your own research before making investment decisions.

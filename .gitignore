@@ -5,6 +5,7 @@ dist/
 /reports/
 /formatted-reports/
 *.log
+/logs/ocr/
 /data/
 /output/
 /test-results/

@@ -10,6 +10,7 @@ import { createFMPClient } from "../services/fmp-client.js";
 import { FMPTradeSource } from "../services/fmp-trade-source.js";
 import { createGovernmentProvider } from "../data/government-provider.js";
 import { createEdgarProvider } from "../data/edgar-provider.js";
+import { runDailyOcr } from "../ocr/ocr-filings.js";
 
 function createTradeProvider() {
   if (process.env.DATA_SOURCE === "fmp") {
@@ -60,6 +61,7 @@ async function loadExchangeMap(): Promise<Map<string, string>> {
 export const reportHtmlCommand = new Command("report:html")
   .description("Generate a weekly HTML report and optionally publish to AWS S3")
   .option("--no-fetch-trades", "Use cached trade data instead of fetching fresh")
+  .option("--no-ocr", "Skip OCR of scanned/paper filings after fetching (normally up to OCR_DAILY_MAX_PAGES pages per run)")
   .option("--no-market-data", "Skip market data fetching (faster, no market cap scores)")
   .option(
     "--out <dir>",
@@ -162,6 +164,13 @@ export const reportHtmlCommand = new Command("report:html")
           const targetDate = getDefaultTargetDate();
           tradeData = await fetchTrades(createTradeProvider(), targetDate);
           console.log("");
+
+          // OCR newly found scanned/paper filings (within a daily page budget); it merges
+          // rows into trades.json, so reload before counting what changed
+          if (options.ocr && (await runDailyOcr()) > 0) {
+            tradeData = (await loadTrades()) ?? tradeData;
+            console.log("");
+          }
 
           const newCount = tradeData.senateTrades.length + tradeData.houseTrades.length;
           if (options.skipUnchanged && newCount === previousCount) {

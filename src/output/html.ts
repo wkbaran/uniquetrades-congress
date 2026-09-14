@@ -93,7 +93,10 @@ function typeClass(type: string | undefined): string {
 /** Link to the original PTR filing (House Clerk PDF or Senate eFD page), when known. */
 function filingLinkHtml(trade: FMPTrade): string {
   if (!trade.link) return "";
-  return `<a class="filing-link" href="${esc(trade.link)}" target="_blank" rel="noopener noreferrer" title="View original PTR filing">Filing ↗</a>`;
+  const link = `<a class="filing-link" href="${esc(trade.link)}" target="_blank" rel="noopener noreferrer" title="View original PTR filing">Filing ↗</a>`;
+  return trade.source === "ocr"
+    ? `${link} <span class="option-tag" title="Transcribed by OCR from a scanned filing — check the original before relying on it">OCR</span>`
+    : link;
 }
 
 function isOptionTrade(trade: FMPTrade): boolean {

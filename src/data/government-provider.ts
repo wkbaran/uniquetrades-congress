@@ -128,7 +128,7 @@ function log(chamber: string, msg: string) {
   console.log(`  [${ts}] [${chamber}] ${msg}`);
 }
 
-async function fetchWithUA(url: string, options?: RequestInit) {
+export async function fetchWithUA(url: string, options?: RequestInit) {
   return fetch(url, {
     ...options,
     headers: { "User-Agent": USER_AGENT, ...options?.headers },
@@ -423,7 +423,7 @@ function readSetCookies(resp: Response, jar: Map<string, string>) {
 }
 
 /** Accept terms and return a session cookie string */
-async function acceptSenatEfdTerms(): Promise<string | null> {
+export async function acceptSenatEfdTerms(): Promise<string | null> {
   // Get CSRF token from home page
   const homeResp = await fetchWithUA(SENATE_HOME_URL);
   if (!homeResp.ok) return null;

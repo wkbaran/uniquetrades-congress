@@ -12,6 +12,7 @@ import { listCommitteesCommand } from "./commands/list-committees.js";
 import { listTradesCommand } from "./commands/list-trades.js";
 import { reportSalesCommand } from "./commands/report-sales.js";
 import { reportHtmlCommand } from "./commands/report-html.js";
+import { ocrCatchupCommand } from "./commands/ocr-catchup.js";
 
 // Load environment variables
 config();
@@ -42,6 +43,7 @@ program.addCommand(listCommitteesCommand);
 program.addCommand(listTradesCommand);
 program.addCommand(reportSalesCommand);
 program.addCommand(reportHtmlCommand);
+program.addCommand(ocrCatchupCommand);
 
 // Parse arguments
 program.parse();
