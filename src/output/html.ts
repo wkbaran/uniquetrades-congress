@@ -929,7 +929,7 @@ export interface HtmlReportOptions {
   salesTrades: Array<{ trade: FMPTrade; party: string | undefined }>;
   /** All purchase trades (sorted by date descending) */
   purchaseTrades: Array<{ trade: FMPTrade; party: string | undefined }>;
-  /** Title date label, e.g. "Week of April 13, 2026" */
+  /** Title date label: the date the report ran, e.g. "April 13, 2026" */
   dateLabel: string;
   /** Link back to the index page */
   indexUrl?: string;

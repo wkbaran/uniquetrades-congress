@@ -41,14 +41,6 @@ function formatDate(date: Date): string {
   });
 }
 
-function weekLabel(date: Date): string {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return formatDate(d);
-}
-
 /** Load exchange info from the market data cache (populated by --market-data runs). */
 async function loadExchangeMap(): Promise<Map<string, string>> {
   const exchangeMap = new Map<string, string>();
@@ -214,9 +206,11 @@ export const reportHtmlCommand = new Command("report:html")
       const exchangeMap = await loadExchangeMap();
 
       // ── Prepare output directory ─────────────────────────────────────────
+      // Local date for both the folder and the page labels: a UTC date rolls over
+      // mid-evening in US time zones, filing an evening run under tomorrow.
       const now = new Date();
-      const dateStr = now.toISOString().split("T")[0];
-      const label = `Week of ${weekLabel(now)}`;
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
       const runDateLabel = formatDate(now);
 
       const dateDir = path.join(webDir, dateStr);
@@ -270,7 +264,7 @@ export const reportHtmlCommand = new Command("report:html")
           trades: member.trades.sort((a, b) =>
             (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? "")
           ),
-          dateLabel: label,
+          dateLabel: runDateLabel,
           memberSlug: key,
           reportUrl: reportFile,
           indexUrl: "../index.html",
@@ -308,7 +302,7 @@ export const reportHtmlCommand = new Command("report:html")
         const partyHtml = buildPartyPage({
           partyLabel: pg.label,
           trades: filtered,
-          dateLabel: label,
+          dateLabel: runDateLabel,
           reportUrl: reportFile,
           indexUrl: "../index.html",
           exchangeMap,
@@ -328,7 +322,7 @@ export const reportHtmlCommand = new Command("report:html")
         report,
         salesTrades,
         purchaseTrades,
-        dateLabel: label,
+        dateLabel: runDateLabel,
         indexUrl: "../index.html",
         exchangeMap,
         partyPageUrls,
