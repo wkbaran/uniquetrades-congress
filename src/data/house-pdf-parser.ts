@@ -12,6 +12,7 @@
 
 import { createHash } from "crypto";
 import { inflateSync } from "zlib";
+import { extractTickerFromDescription } from "./ticker-extract.js";
 
 // ── Standard PDF padding constant (PDF spec §7.6.3.3 Table 3.6) ──────────
 const PDF_PAD = Buffer.from(
@@ -423,7 +424,9 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
   // The data font contains dates (MM/DD/YYYY), amounts, and ticker-like strings.
   // The label font contains short strings like "Name:", "Status:", column headers.
   const dateRe = /^\d{2}\/\d{2}\/\d{4}$/;
-  const amountRe = /^\$[\d,]+ - \$[\d,]+$|^\$[\d,]+ -$|^Over \$[\d,]+$/i;
+  // Ranges, open-ended "Over $X" (also "Spouse/DC Over $X"), and exact values some
+  // filers report instead of a range ("$2,722.50")
+  const amountRe = /^\$[\d,]+ - \$[\d,]+$|^\$[\d,]+ -$|^(?:Spouse\/DC )?Over \$[\d,]+$|^\$[\d,]+\.\d{2}$/i;
 
   const fontScores = new Map<string, number>();
   for (const { font, text } of blocks) {
@@ -474,6 +477,8 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
   const transactions: HousePtrTransaction[] = [];
 
   const tickerRe = /^\(([A-Z0-9.^-]+)\)$/;
+  // A description fragment ending in a ticker, including share classes: "Common Stock (BRK.B)"
+  const embeddedTickerRe = /\(([A-Z]{1,5}(?:[./-][A-Z])?)\)\s*$/;
   const assetTypeRe = /^\[([A-Z]{2,3})\]$/;
   const txnTypeMap: Record<string, string> = {
     P: "Purchase", S: "Sale", E: "Exchange", G: "Gift", O: "Other",
@@ -483,10 +488,11 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
   const txnTypeOf = (s: string): string | undefined =>
     txnTypeMap[s] ?? (partialSaleRe.test(s) && s.replace(partialSaleRe, "") === "" ? "Sale (Partial)" : undefined);
 
-  // Merge adjacent amount fragments ("$15,001 -" + "$50,000" → "$15,001 - $50,000")
+  // Merge adjacent amount fragments ("$15,001 -" + "$50,000" → "$15,001 - $50,000",
+  // "Spouse/DC Over" + "$1,000,000" → "Spouse/DC Over $1,000,000")
   const mergedBlocks: string[] = [];
   for (let i = 0; i < dataBlocks.length; i++) {
-    if (dataBlocks[i].match(/^\$[\d,]+ -$/) && i + 1 < dataBlocks.length && dataBlocks[i + 1].match(/^\$[\d,]+$/)) {
+    if (dataBlocks[i].match(/^\$[\d,]+ -$|^(?:Spouse\/DC )?Over$/i) && i + 1 < dataBlocks.length && dataBlocks[i + 1].match(/^\$[\d,]+$/)) {
       mergedBlocks.push(`${dataBlocks[i]} ${dataBlocks[i + 1]}`);
       i++;
     } else {
@@ -563,9 +569,23 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
         if (!tx.transactionType && txnTypeOf(next)) { tx.transactionType = txnTypeOf(next); j++; continue; }
         // Owner codes: Sp/SP=spouse, DC=dependent child, JT=joint
         if (next.match(/^(Sp|SP|DC|JT)$/i)) { tx.owner = next.toLowerCase() === "sp" ? "Spouse" : next; j++; continue; }
+        // Exchange-qualified ticker split across blocks: "... ETF Trust NYSEARCA:" + "DIA"
+        if (!tx.ticker && /\b(?:NYSEARCA|NYSE|NASDAQ|NYSEAMERICAN|BATS|CBOE):$/.test(next) &&
+            /^[A-Z]{1,5}(?:\.[A-Z])?$/.test(mergedBlocks[j + 1] ?? "")) {
+          tx.assetDescription = `${tx.assetDescription} ${next} ${mergedBlocks[j + 1]}`;
+          tx.ticker = mergedBlocks[j + 1];
+          j += 2;
+          continue;
+        }
+        // A page break can split a row: the "Filing ID #" footer lands mid-row and the
+        // ticker ("(BRO)" or "Stock (IDXX)") follows it. Step over the footer only then.
+        if (!tx.ticker && next.includes("Filing ID")) {
+          const after = mergedBlocks[j + 1] ?? "";
+          if (tickerRe.test(after) || (after.length < 100 && embeddedTickerRe.test(after))) { j++; continue; }
+        }
         // Ticker embedded in asset description as "Something (TICK)" — extract
         if (!tx.ticker && !tx.assetType) {
-          const embeddedTicker = next.match(/\(([A-Z]{1,5})\)\s*$/) || block.match(/\(([A-Z]{1,5})\)\s*$/);
+          const embeddedTicker = next.match(embeddedTickerRe) || block.match(embeddedTickerRe);
           if (embeddedTicker && next.length < 100) { tx.assetDescription = (tx.assetDescription + " " + next).trim(); j++; continue; }
         }
 
@@ -604,11 +624,9 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
           tx.transactionType ??= "Sale (Partial)";
         }
         tx.transactionType ??= rowPendingType;
-        // Extract ticker embedded at end of asset description: "...Common Stock (TMO)"
-        if (!tx.ticker) {
-          const embedded = tx.assetDescription.match(/\(([A-Z]{1,5})\)\s*$/);
-          if (embedded) tx.ticker = embedded[1];
-        }
+        // Extract ticker embedded in the asset description: "...Common Stock (TMO)",
+        // "... (BRK.B)", "... (SONY) 12/26/2026", "DIA - State Street SPDR ..."
+        if (!tx.ticker) tx.ticker = extractTickerFromDescription(tx.assetDescription);
         if (!tx.ticker) flags.push(`No ticker found for: "${tx.assetDescription.slice(0, 40)}"`);
         if (!tx.transactionDate) flags.push(`No date found for: "${tx.assetDescription.slice(0, 40)}"`);
         if (!tx.transactionType) tx.transactionType = "Unknown";

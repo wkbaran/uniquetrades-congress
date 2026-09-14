@@ -18,6 +18,11 @@ const MEMBERSHIP_URL =
   "https://unitedstates.github.io/congress-legislators/committee-membership-current.json";
 const LEGISLATORS_URL =
   "https://unitedstates.github.io/congress-legislators/legislators-current.json";
+const LEGISLATORS_HISTORICAL_URL =
+  "https://unitedstates.github.io/congress-legislators/legislators-historical.json";
+// Former members whose service ended on/after this date are kept so trades they
+// filed (or that surface in late disclosures) still resolve after they leave office.
+const FORMER_MEMBERS_SINCE = "2025-01-01";
 
 const COMMITTEES_FILE = "committees.json";
 const MEMBERSHIP_FILE = "membership.json";
@@ -74,7 +79,9 @@ export async function fetchMembership(): Promise<CommitteeMembershipResponse> {
 }
 
 /**
- * Fetch current legislators from congress-legislators
+ * Fetch current legislators plus recently departed ones from congress-legislators.
+ * Members who resign or lose their seat move to the historical file, but their
+ * disclosures stay in the trade data, so they still need a name and party.
  */
 export async function fetchLegislators(): Promise<Legislator[]> {
   const response = await fetch(LEGISLATORS_URL);
@@ -85,13 +92,38 @@ export async function fetchLegislators(): Promise<Legislator[]> {
     );
   }
 
-  const data = await response.json();
-  const legislators = LegislatorsResponseSchema.parse(data);
+  const current = LegislatorsResponseSchema.parse(await response.json());
 
+  let former: Legislator[] = [];
+  try {
+    const histResponse = await fetch(LEGISLATORS_HISTORICAL_URL);
+    if (!histResponse.ok) throw new Error(`${histResponse.status} ${histResponse.statusText}`);
+    // Filter before validating: the full history (1789 onward) has entries the
+    // schema doesn't cover, and only recent members matter here.
+    const history = (await histResponse.json()) as Array<{ id?: { bioguide?: string }; terms?: Array<{ end?: string }> }>;
+    const currentIds = new Set(current.map((l) => l.id.bioguide));
+    former = LegislatorsResponseSchema.parse(
+      history.filter((l) =>
+        (l.terms?.at(-1)?.end ?? "") >= FORMER_MEMBERS_SINCE &&
+        !currentIds.has(l.id?.bioguide ?? "")
+      )
+    );
+  } catch (error) {
+    console.warn("Warning: Could not fetch former legislators:", (error as Error).message);
+  }
+
+  const legislators = [...current, ...former];
   await saveData(LEGISLATORS_FILE, legislators);
-  console.log(`Fetched and saved ${legislators.length} legislators`);
+  console.log(
+    `Fetched and saved ${legislators.length} legislators (${current.length} current, ${former.length} former since ${FORMER_MEMBERS_SINCE})`
+  );
 
   return legislators;
+}
+
+/** A legislator whose most recent term hasn't ended yet */
+export function isCurrentLegislator(legislator: Legislator, today = new Date().toISOString().slice(0, 10)): boolean {
+  return (legislator.terms.at(-1)?.end ?? "") >= today;
 }
 
 /**
@@ -304,10 +336,12 @@ function endsWithTokens(tokens: string[], tail: string[]): boolean {
 }
 
 /**
- * Resolve a filer name (as written on a disclosure) to a single current legislator.
+ * Resolve a filer name (as written on a disclosure) to a single legislator.
  * Requires both a whole-word last-name match and a compatible given name, and
  * refuses ambiguous results, so different people who share a last name
  * (Susie/Laurel Lee, Dave/Rich McCormick) never collapse into one.
+ * Sitting members are matched first; former members are only considered when
+ * no sitting member matches, so a departed namesake can't steal a current filer.
  */
 export function resolveLegislator(
   firstName: string,
@@ -316,6 +350,21 @@ export function resolveLegislator(
 ): Legislator | null {
   const lastToks = nameTokens(lastName);
   if (lastToks.length === 0) return null;
+
+  const current = legislators.filter((l) => isCurrentLegislator(l));
+  const fromCurrent = bestLegislatorMatch(firstName, lastToks, current);
+  if (fromCurrent.best || fromCurrent.tied) return fromCurrent.tied ? null : fromCurrent.best;
+
+  const former = legislators.filter((l) => !isCurrentLegislator(l));
+  const fromFormer = bestLegislatorMatch(firstName, lastToks, former);
+  return fromFormer.tied ? null : fromFormer.best;
+}
+
+function bestLegislatorMatch(
+  firstName: string,
+  lastToks: string[],
+  legislators: Legislator[]
+): { best: Legislator | null; tied: boolean } {
   const rawFirst = firstName.trim();
 
   let best: Legislator | null = null;
@@ -352,7 +401,7 @@ export function resolveLegislator(
     else if (score === bestScore) tied = true;
   }
 
-  return tied ? null : best;
+  return { best, tied };
 }
 
 /**

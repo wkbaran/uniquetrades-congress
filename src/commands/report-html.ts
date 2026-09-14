@@ -2,7 +2,7 @@ import { Command } from "commander";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { loadTrades, fetchTrades, getDefaultTargetDate } from "../services/trade-service.js";
-import { loadCommitteeData, buildPartyMap, findMemberByName, getMemberParty } from "../services/committee-service.js";
+import { loadCommitteeData, fetchAllCommitteeData, buildPartyMap, findMemberByName, getMemberParty } from "../services/committee-service.js";
 import { analyzeTrades } from "../services/analysis-service.js";
 import type { AnalysisReport } from "../services/analysis-service.js";
 import { createFMPProvider } from "../data/fmp-provider.js";
@@ -28,10 +28,11 @@ import { buildHtmlReport, buildPartyPage, buildMemberPage, buildScoreLookup, typ
 import { createMemberResolver } from "../output/member-identity.js";
 import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest } from "../output/index-page.js";
 import { publishOutput } from "../publish.js";
-import { loadData, getLatestReport } from "../utils/storage.js";
+import { loadData, getLatestReport, getDataAge } from "../utils/storage.js";
 import type { FMPTrade } from "../types/index.js";
 
 const DEFAULT_WEB_DIR = "output/web";
+const COMMITTEE_DATA_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", {
@@ -98,6 +99,19 @@ export const reportHtmlCommand = new Command("report:html")
       }
 
       // ── Load committee data (needed in both paths) ───────────────────────
+      // Legislators and committee assignments change (resignations, new members),
+      // so refresh them weekly; keep the cached copy if the download fails.
+      if (!options.renderOnly) {
+        const age = await getDataAge("committee-data.json");
+        if (!age.exists || (age.ageMs ?? Infinity) > COMMITTEE_DATA_MAX_AGE_MS) {
+          try {
+            await fetchAllCommitteeData();
+          } catch (err) {
+            console.warn(`⚠️  Committee data refresh failed, using cached copy: ${(err as Error).message}`);
+          }
+        }
+      }
+
       const committeeData = await loadCommitteeData();
       if (!committeeData) {
         console.warn("⚠️  No committee data — run fetch:committees for committee analysis.");

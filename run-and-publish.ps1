@@ -45,6 +45,8 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+# Route node's warnings/errors to stdout so log lines stay in order (see src/index.ts)
+$env:LOG_TO_STDOUT = "1"
 & $NodeExe --env-file-if-exists=.env dist/index.js report:html --publish --skip-unchanged 2>&1 | Out-NativeLog
 if ($LASTEXITCODE -ne 0) {
     Write-Log "Pipeline failed with exit code $LASTEXITCODE."

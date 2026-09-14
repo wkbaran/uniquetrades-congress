@@ -16,6 +16,14 @@ import { reportHtmlCommand } from "./commands/report-html.js";
 // Load environment variables
 config();
 
+// Scheduled runs capture stdout and stderr through one pipe, where the two
+// streams can interleave out of order; send warnings/errors to stdout instead.
+// Exit codes are unaffected, so failures are still detected.
+if (process.env.LOG_TO_STDOUT) {
+  console.warn = console.log;
+  console.error = console.log;
+}
+
 const program = new Command();
 
 program

@@ -12,6 +12,7 @@
 import { inflateRawSync } from "zlib";
 import { createHash } from "crypto";
 import { parseHousePtrPdf, expandHouseAssetType, type HousePtrTransaction } from "./house-pdf-parser.js";
+import { extractTickerFromDescription } from "./ticker-extract.js";
 import type { FMPTrade } from "../types/index.js";
 import type { TradeSourceProvider } from "./trade-source.js";
 import { loadData, saveData } from "../utils/storage.js";
@@ -26,6 +27,14 @@ const SENATE_SEARCH_URL = "https://efdsearch.senate.gov/search/report/data/";
 
 const HOUSE_SEEN_FILE = "house-seen-docids.json";
 const SENATE_SEEN_FILE = "senate-seen-guids.json";
+const REVIEW_FILE = "unparseable-filings.json";
+
+// Always re-scan at least this many days of filings. The incremental start
+// date comes from the newest stored transaction, so a filing that reaches the
+// index late (or a skipped run) could otherwise fall before it and never be
+// fetched; seen-ID tracking keeps the overlap cheap.
+export const LOOKBACK_DAYS = 30;
+
 const USER_AGENT =
   "uniquetrades-congress/1.0 (bill.baran@gmail.com) government-data-scraper";
 
@@ -50,7 +59,70 @@ interface FlaggedItem {
   issues: string[];
 }
 
+/** A filing that yielded no machine-readable transactions and needs a human look */
+export interface ReviewFiling {
+  chamber: "house" | "senate";
+  id: string;
+  member: string;
+  filingDate: string;
+  url: string;
+  reason: string;
+  firstSeen: string;
+}
+
+type ReviewCandidate = Omit<ReviewFiling, "firstSeen">;
+
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/** The earlier of the incremental start date and LOOKBACK_DAYS before `now` (local midnight) */
+export function lookbackSince(sinceDate: Date, now = new Date(), days = LOOKBACK_DAYS): Date {
+  const floor = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days);
+  return sinceDate < floor ? sinceDate : floor;
+}
+
+/** Every House annual index year that can hold filings dated on or after `sinceDate` */
+export function houseIndexYears(sinceDate: Date, now = new Date()): number[] {
+  const years: number[] = [];
+  for (let y = sinceDate.getFullYear(); y <= now.getFullYear(); y++) years.push(y);
+  return years;
+}
+
+/** Summarize why a filing produced no transactions */
+function emptyFilingReason(flags: string[]): string {
+  if (flags.some((f) => /image-only|scanned|not encrypted/i.test(f))) return "scanned PDF (image-only)";
+  return flags[0] ?? "no transactions parsed";
+}
+
+/**
+ * Add filings to the persistent review list (deduplicated by chamber + id) and
+ * print one clear line for the ones not already on it.
+ */
+async function recordForReview(chamber: "House" | "Senate", found: ReviewCandidate[]) {
+  if (found.length === 0) return;
+  const stored = await loadData<ReviewFiling[]>(REVIEW_FILE);
+  const list = stored?.data ?? [];
+  const known = new Set(list.map((f) => `${f.chamber}:${f.id}`));
+  const firstSeen = new Date().toISOString();
+
+  const added: ReviewFiling[] = [];
+  for (const f of found) {
+    const key = `${f.chamber}:${f.id}`;
+    if (known.has(key)) continue;
+    known.add(key);
+    added.push({ ...f, firstSeen });
+  }
+  if (added.length === 0) return;
+
+  list.push(...added);
+  await saveData(REVIEW_FILE, list);
+  log(
+    chamber,
+    `⚠️  ${added.length} filing(s) need manual review (no machine-readable transactions): ` +
+    added.map((f) => `${f.member} ${f.id} — ${f.reason}`).join("; ") +
+    ` [${list.length} total in data/${REVIEW_FILE}]`
+  );
+}
+
 function log(chamber: string, msg: string) {
   const ts = new Date().toISOString().slice(11, 19);
   console.log(`  [${ts}] [${chamber}] ${msg}`);
@@ -84,6 +156,12 @@ function parseAmountRange(amount: string | undefined): { low: number; high: numb
   if (over) {
     const v = parseInt(over[1].replace(/,/g, ""));
     return { low: v, high: v * 2 };
+  }
+  // Some filers report an exact value instead of a range, e.g. "$318.74"
+  const exact = amount.match(/^\s*\$([\d,]+(?:\.\d{1,2})?)\s*$/);
+  if (exact) {
+    const v = parseFloat(exact[1].replace(/,/g, ""));
+    return { low: v, high: v };
   }
   return null;
 }
@@ -242,10 +320,16 @@ function extractXmlFromZip(zipBuf: Buffer): string | null {
   return null;
 }
 
+/**
+ * Returns the filing's trades, or null when the PDF couldn't be downloaded —
+ * a transient failure the caller should retry next run rather than mark seen.
+ * Filings that download but yield no transactions go on `review`.
+ */
 async function processHousePtr(
   entry: { docId: string; firstName: string; lastName: string; filingDate: string; year: number },
-  chamberReport: ChamberReport
-): Promise<FMPTrade[]> {
+  chamberReport: ChamberReport,
+  review: ReviewCandidate[]
+): Promise<FMPTrade[] | null> {
   const ptrUrl = HOUSE_PTR_URL(entry.year, entry.docId);
   log("House", `Processing PTR ${entry.docId}: ${entry.lastName}, ${entry.firstName}`);
 
@@ -253,20 +337,20 @@ async function processHousePtr(
   try {
     const resp = await fetchWithUA(ptrUrl);
     if (!resp.ok) {
-      log("House", `  ⚠️  HTTP ${resp.status} — skipping`);
+      log("House", `  ⚠️  HTTP ${resp.status} — will retry next run`);
       chamberReport.ptrsErrored++;
       chamberReport.flagged.push({
         docId: entry.docId,
         member: `${entry.firstName} ${entry.lastName}`,
         issues: [`HTTP ${resp.status} fetching PDF`],
       });
-      return [];
+      return null;
     }
     pdfBytes = Buffer.from(await resp.arrayBuffer());
   } catch (e) {
-    log("House", `  ⚠️  Fetch error: ${(e as Error).message}`);
+    log("House", `  ⚠️  Fetch error: ${(e as Error).message} — will retry next run`);
     chamberReport.ptrsErrored++;
-    return [];
+    return null;
   }
 
   let parsed;
@@ -279,6 +363,10 @@ async function processHousePtr(
       docId: entry.docId,
       member: `${entry.firstName} ${entry.lastName}`,
       issues: [`Parse error: ${(e as Error).message}`],
+    });
+    review.push({
+      chamber: "house", id: entry.docId, member: `${entry.firstName} ${entry.lastName}`,
+      filingDate: entry.filingDate, url: ptrUrl, reason: `parse error: ${(e as Error).message}`,
     });
     return [];
   }
@@ -309,6 +397,13 @@ async function processHousePtr(
       docId: entry.docId,
       member: `${firstName} ${lastName}`,
       issues: parsed.flags,
+    });
+  }
+
+  if (trades.length === 0) {
+    review.push({
+      chamber: "house", id: entry.docId, member: `${firstName} ${lastName}`,
+      filingDate: entry.filingDate, url: ptrUrl, reason: emptyFilingReason(parsed.flags),
     });
   }
 
@@ -369,7 +464,8 @@ function formatEfdDate(d: Date): string {
 
 async function fetchSenatePtrGuids(
   cookie: string,
-  sinceDate: Date
+  sinceDate: Date,
+  paperFilings: ReviewCandidate[] = []
 ): Promise<Array<{ guid: string; firstName: string; lastName: string; filedDate: string }>> {
   // The AJAX search API is a DataTables endpoint: POST form data with
   // start/length paging, filtered server-side by submission date. (GET
@@ -441,7 +537,16 @@ async function fetchSenatePtrGuids(
       }
 
       // Paper filings are scanned images with no parseable transaction table
-      if (/\/paper\//.test(link)) { paperSkipped++; continue; }
+      const paperM = link.match(/\/paper\/([a-f0-9-]+)\//);
+      if (paperM) {
+        paperSkipped++;
+        paperFilings.push({
+          chamber: "senate", id: paperM[1], member: `${firstName} ${lastName}`.replace(/\s+/g, " ").trim(),
+          filingDate: filedDate, url: `https://efdsearch.senate.gov/search/view/paper/${paperM[1]}/`,
+          reason: "paper filing (scanned)",
+        });
+        continue;
+      }
       const guidM = link.match(/\/ptr\/([a-f0-9-]+)\//);
       if (!guidM) continue;
 
@@ -565,11 +670,13 @@ export function parseSenatePtrPage(html: string): {
   return { memberName, filingDate, transactions, flags };
 }
 
+/** Same contract as processHousePtr: null means retry next run */
 async function processSenatePtr(
   entry: { guid: string; firstName: string; lastName: string; filedDate: string },
   cookie: string,
-  chamberReport: ChamberReport
-): Promise<FMPTrade[]> {
+  chamberReport: ChamberReport,
+  review: ReviewCandidate[]
+): Promise<FMPTrade[] | null> {
   const ptrUrl = `https://efdsearch.senate.gov/search/view/ptr/${entry.guid}/`;
   log("Senate", `Processing PTR ${entry.guid}: ${entry.lastName}, ${entry.firstName}`);
 
@@ -579,15 +686,15 @@ async function processSenatePtr(
       headers: { Cookie: cookie, Referer: "https://efdsearch.senate.gov/search/" },
     });
     if (!resp.ok) {
-      log("Senate", `  ⚠️  HTTP ${resp.status}`);
+      log("Senate", `  ⚠️  HTTP ${resp.status} — will retry next run`);
       chamberReport.ptrsErrored++;
-      return [];
+      return null;
     }
     html = await resp.text();
   } catch (e) {
-    log("Senate", `  ⚠️  Fetch error: ${(e as Error).message}`);
+    log("Senate", `  ⚠️  Fetch error: ${(e as Error).message} — will retry next run`);
     chamberReport.ptrsErrored++;
-    return [];
+    return null;
   }
 
   const parsed = parseSenatePtrPage(html);
@@ -612,7 +719,9 @@ async function processSenatePtr(
       type: tx.transactionType,
       amount: tx.amount,
       comment: tx.comment === "--" ? undefined : tx.comment,
-      symbol: tx.ticker || undefined,
+      // Senate rows often leave the ticker column "--" but name it in the asset
+      // description, e.g. "SDZNY- Sandoz Group AG ADR"
+      symbol: tx.ticker || extractTickerFromDescription(tx.assetDescription),
     };
   });
 
@@ -627,6 +736,13 @@ async function processSenatePtr(
   if (parsed.flags.length > 0) {
     log("Senate", `  ⚠️  Flags: ${parsed.flags.join("; ")}`);
     chamberReport.flagged.push({ docId: entry.guid, member: `${firstName} ${lastName}`, issues: parsed.flags });
+  }
+
+  if (trades.length === 0) {
+    review.push({
+      chamber: "senate", id: entry.guid, member: `${firstName} ${lastName}`,
+      filingDate: parsed.filingDate ?? entry.filedDate, url: ptrUrl, reason: emptyFilingReason(parsed.flags),
+    });
   }
 
   return trades;
@@ -646,7 +762,9 @@ export class GovernmentProvider implements TradeSourceProvider {
       ptrsProcessed: 0, ptrsSkipped: 0, ptrsErrored: 0, tradesExtracted: 0, flagged: [],
     };
 
-    log("Senate", `Fetching trades since ${sinceDate.toISOString().split("T")[0]}`);
+    const effectiveSince = lookbackSince(sinceDate);
+    log("Senate", `Fetching filings since ${effectiveSince.toISOString().split("T")[0]}` +
+      (effectiveSince < sinceDate ? ` (${LOOKBACK_DAYS}-day lookback)` : ""));
 
     // Accept terms
     const cookie = await acceptSenatEfdTerms();
@@ -661,7 +779,8 @@ export class GovernmentProvider implements TradeSourceProvider {
     log("Senate", `${seen.size} PTRs already seen`);
 
     // Fetch new PTR GUIDs from search
-    const entries = await fetchSenatePtrGuids(cookie, sinceDate);
+    const review: ReviewCandidate[] = [];
+    const entries = await fetchSenatePtrGuids(cookie, effectiveSince, review);
     log("Senate", `${entries.length} PTR(s) from search (${entries.filter(e => seen.has(e.guid)).length} already seen)`);
 
     const trades: FMPTrade[] = [];
@@ -671,12 +790,14 @@ export class GovernmentProvider implements TradeSourceProvider {
       if (seen.has(entry.guid)) { chamberReport.ptrsSkipped++; continue; }
 
       await new Promise(r => setTimeout(r, delay));
-      const entryTrades = await processSenatePtr(entry, cookie, chamberReport);
+      const entryTrades = await processSenatePtr(entry, cookie, chamberReport, review);
+      if (entryTrades === null) continue; // transient failure — retry next run
       trades.push(...entryTrades);
       seen.add(entry.guid);
     }
 
     await saveSeen(SENATE_SEEN_FILE, seen);
+    await recordForReview("Senate", review);
     this.lastRunReport = { ...this.lastRunReport!, senate: chamberReport } as ScrapeRunReport;
 
     log("Senate", `Done: ${chamberReport.ptrsProcessed} processed, ${chamberReport.tradesExtracted} trades, ${chamberReport.flagged.length} flagged`);
@@ -693,23 +814,20 @@ export class GovernmentProvider implements TradeSourceProvider {
       senate: { ptrsProcessed: 0, ptrsSkipped: 0, ptrsErrored: 0, tradesExtracted: 0, flagged: [] },
     };
 
-    log("House", `Fetching trades since ${sinceDate.toISOString().split("T")[0]}`);
+    const effectiveSince = lookbackSince(sinceDate);
+    log("House", `Fetching filings since ${effectiveSince.toISOString().split("T")[0]}` +
+      (effectiveSince < sinceDate ? ` (${LOOKBACK_DAYS}-day lookback)` : ""));
 
     const seen = await loadSeen(HOUSE_SEEN_FILE);
     log("House", `${seen.size} PTRs already seen`);
 
-    // Fetch index for current year and previous year (in case sinceDate spans year boundary)
-    const currentYear = new Date().getFullYear();
-    const years = sinceDate.getFullYear() < currentYear
-      ? [sinceDate.getFullYear(), currentYear]
-      : [currentYear];
-
+    // One index ZIP per year; a lookback in early January reaches into last year's
     const allEntries: Array<{
       docId: string; firstName: string; lastName: string; filingDate: string; year: number;
     }> = [];
 
-    for (const year of years) {
-      const entries = await fetchHouseIndexDocIds(year, sinceDate);
+    for (const year of houseIndexYears(effectiveSince)) {
+      const entries = await fetchHouseIndexDocIds(year, effectiveSince);
       allEntries.push(...entries);
     }
 
@@ -722,6 +840,7 @@ export class GovernmentProvider implements TradeSourceProvider {
     }
 
     const trades: FMPTrade[] = [];
+    const review: ReviewCandidate[] = [];
     let i = 0;
 
     for (const entry of newEntries) {
@@ -731,13 +850,15 @@ export class GovernmentProvider implements TradeSourceProvider {
       );
 
       await new Promise(r => setTimeout(r, 800)); // 800ms between PDF fetches
-      const entryTrades = await processHousePtr(entry, chamberReport);
+      const entryTrades = await processHousePtr(entry, chamberReport, review);
+      if (entryTrades === null) continue; // transient failure — retry next run
       trades.push(...entryTrades);
       seen.add(entry.docId);
     }
     process.stdout.write("\n");
 
     await saveSeen(HOUSE_SEEN_FILE, seen);
+    await recordForReview("House", review);
     this.lastRunReport!.house = chamberReport;
 
     log("House", `Done: ${chamberReport.ptrsProcessed} processed, ${chamberReport.tradesExtracted} trades, ${chamberReport.flagged.length} flagged, ${chamberReport.ptrsErrored} errors`);

@@ -104,3 +104,61 @@ test("bond-dates PTR: transaction type isn't clobbered by stray PDF noise later 
   expect(types.filter((t) => t === "Purchase")).toHaveLength(7);
   expect(types.filter((t) => t === "Sale")).toHaveLength(1);
 });
+
+test("'Spouse/DC Over $1,000,000' amount split across two blocks is captured", async () => {
+  // Real filing: Doris Matsui, docId 20033695 -- Treasury note purchases whose amount
+  // cell renders as "Spouse/DC Over" + "$1,000,000"; all four rows used to have no amount.
+  const parsed = await parseHousePtrPdf(fixture("house-ptr-spouse-over-amount.pdf"));
+
+  expect(parsed.transactions).toHaveLength(4);
+  for (const tx of parsed.transactions) {
+    expect(tx.amount).toBe("Spouse/DC Over $1,000,000");
+    expect(tx.transactionDate).toBe("12/15/2025");
+  }
+});
+
+test("exact dollar amounts reported instead of a range are captured", async () => {
+  // Real filing: Max Miller, docId 20034247 -- private fund purchases reported as exact values.
+  const parsed = await parseHousePtrPdf(fixture("house-ptr-exact-amounts.pdf"));
+
+  const amounts = parsed.transactions.map((t) => t.amount);
+  expect(amounts).toContain("$318.74");
+  expect(amounts).toContain("$707.21");
+  expect(amounts).toContain("$584.22");
+  expect(parsed.transactions.filter((t) => !t.amount)).toHaveLength(0);
+});
+
+test("multi-page PTR: exact amount stays on its row and doesn't corrupt the next one", async () => {
+  // Pelosi 20033725: Versant's exchange is "$15.00". Unparsed, that block used to start a
+  // phantom "$15.00 Vistra ..." row that picked up stray "S" noise as a Sale; the PDF codes it "P".
+  const parsed = await parseHousePtrPdf(fixture("house-ptr-multipage.pdf"));
+
+  const vsnt = parsed.transactions.find((t) => t.ticker === "VSNT");
+  expect(vsnt?.amount).toBe("$15.00");
+  const vst = parsed.transactions.find((t) => t.ticker === "VST");
+  expect(vst?.assetDescription).toBe("Vistra Corp. Common Stock (VST)");
+  expect(vst?.transactionType).toBe("Purchase");
+});
+
+test("row split by a page break keeps the ticker that follows the Filing ID footer", async () => {
+  // Real filing: April McClain Delaney, docId 20033737 -- "IDEXX Laboratories, Inc. - Common"
+  // ends page 1; "Stock (IDXX)" and "[ST]" come after the footer on page 2.
+  const parsed = await parseHousePtrPdf(fixture("house-ptr-page-break-ticker.pdf"));
+
+  const idxx = parsed.transactions.find((t) => t.ticker === "IDXX");
+  expect(idxx).toBeDefined();
+  expect(idxx?.assetDescription).toBe("IDEXX Laboratories, Inc. - Common Stock (IDXX)");
+  expect(idxx?.assetType).toBe("ST");
+  expect(idxx?.transactionType).toBe("Sale (Partial)");
+  expect(idxx?.amount).toBe("$1,001 - $15,000");
+});
+
+test("share-class and exchange-prefixed tickers are captured", async () => {
+  // Real filing: Mark Alford, docId 20034201 -- "Common Stock (BRK.B)" on a continuation line,
+  // and "... ETF Trust NYSEARCA:" followed by a bare "DIA" block.
+  const parsed = await parseHousePtrPdf(fixture("house-ptr-exchange-ticker.pdf"));
+
+  const tickers = parsed.transactions.map((t) => t.ticker);
+  expect(tickers).toContain("BRK.B");
+  expect(tickers).toContain("DIA");
+});
