@@ -31,6 +31,18 @@ const MARKET_CACHE_FILE = "market-data-cache.json";
 // 100 ms between SEC API requests → well under 10 req/sec
 const REQUEST_DELAY_MS = 150;
 
+// 9-char CUSIPs (e.g. Treasury notes "91282CNG2") land in the symbol field but never map to a CIK
+const CUSIP_RE = /^\d{3}[0-9A-Z]{5}\d$/;
+
+interface FetchStats {
+  noCik: string[];
+  failed: string[];
+}
+
+function preview(items: string[], max = 15): string {
+  return items.length > max ? `${items.slice(0, max).join(", ")} … (+${items.length - max} more)` : items.join(", ");
+}
+
 interface TickerEntry {
   cik_str: number;
   ticker: string;
@@ -166,11 +178,14 @@ export class EdgarMarketDataProvider implements MarketDataProvider {
     console.log(`  [EDGAR] Fetching ${uncached.length} symbols from SEC EDGAR...`);
     let fetched = 0;
     let successful = 0;
+    let requested = 0;
+    const stats: FetchStats = { noCik: [], failed: [] };
 
     for (const symbol of uncached) {
-      if (fetched > 0) await this.sleep(REQUEST_DELAY_MS);
+      // Only throttle symbols that will actually hit the SEC API
+      if (this.resolveCik(symbol) !== undefined && requested++ > 0) await this.sleep(REQUEST_DELAY_MS);
 
-      const data = await this.fetchFromEDGAR(symbol);
+      const data = await this.fetchFromEDGAR(symbol, stats);
       if (data) {
         results.set(symbol, data);
         this.marketCache[symbol] = { data, fetchedAt: new Date().toISOString() };
@@ -183,15 +198,36 @@ export class EdgarMarketDataProvider implements MarketDataProvider {
       }
     }
 
-    console.log(`  [EDGAR] Completed: ${successful}/${uncached.length} fetched`);
+    console.log(
+      `  [EDGAR] Completed: ${successful}/${uncached.length} fetched, ` +
+      `${stats.noCik.length} with no SEC CIK (ETFs, funds, foreign/OTC, bonds), ${stats.failed.length} failed`
+    );
+    if (stats.noCik.length > 0) console.log(`  [EDGAR]   No CIK: ${preview(stats.noCik)}`);
+    if (stats.failed.length > 0) console.log(`  [EDGAR]   Failed: ${preview(stats.failed)}`);
     await this.saveCache();
     return results;
   }
 
-  private async fetchFromEDGAR(symbol: string): Promise<MarketData | null> {
-    const cik = this.tickerMap.get(symbol.toUpperCase());
+  /**
+   * Resolve a symbol to a CIK. SEC's map spells share classes with a dash
+   * ("BRK-B", "MOG-A"), while filings use "BRK/B", "BRK.B" or "MOG.A"; if the
+   * class itself is unlisted, fall back to the base ticker's issuer.
+   */
+  resolveCik(symbol: string): number | undefined {
+    const upper = symbol.toUpperCase().trim();
+    if (!upper || CUSIP_RE.test(upper)) return undefined;
+    const direct = this.tickerMap.get(upper);
+    if (direct) return direct;
+    const dashed = upper.replace(/[./\s]+/g, "-");
+    if (dashed === upper && !upper.includes("-")) return undefined;
+    return this.tickerMap.get(dashed) ?? this.tickerMap.get(dashed.split("-")[0]);
+  }
+
+  private async fetchFromEDGAR(symbol: string, stats?: FetchStats): Promise<MarketData | null> {
+    const cik = this.resolveCik(symbol);
     if (!cik) {
-      console.warn(`  [EDGAR] No CIK found for ${symbol}`);
+      if (stats) stats.noCik.push(symbol);
+      else console.log(`  [EDGAR] No CIK found for ${symbol}`);
       return null;
     }
 
@@ -252,7 +288,9 @@ export class EdgarMarketDataProvider implements MarketDataProvider {
         exchange: normalizeExchange(exchange),
       };
     } catch (err) {
-      console.warn(`  [EDGAR] Error fetching ${symbol} (CIK ${cik}):`, (err as Error).message);
+      const message = (err as Error).message;
+      if (stats) stats.failed.push(`${symbol} (${message})`);
+      else console.log(`  [EDGAR] Error fetching ${symbol} (CIK ${cik}): ${message}`);
       return null;
     }
   }

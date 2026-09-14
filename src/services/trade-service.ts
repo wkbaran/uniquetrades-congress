@@ -91,6 +91,10 @@ export async function fetchTrades(
 ): Promise<TradeData> {
   let existingData: TradeData | null = null;
   let startDate: Date;
+  // The Senate gets its own start date: basing it on the newest trade across
+  // both chambers lets a lagging Senate feed (e.g. after an outage) fall
+  // permanently behind. Seen-GUID tracking prevents reprocessing the overlap.
+  let senateStartDate: Date | null = null;
 
   if (refresh) {
     startDate = targetDate;
@@ -119,13 +123,22 @@ export async function fetchTrades(
           `📈 Incremental update: Most recent trade is ${mostRecentDate.toISOString().split("T")[0]}, ` +
           `fetching since ${startDate.toISOString().split("T")[0]}`
         );
+
+        if (senateMostRecent && senateMostRecent < startDate) {
+          senateStartDate = new Date(senateMostRecent);
+          senateStartDate.setDate(senateStartDate.getDate() - 7);
+          console.log(
+            `📈 Senate lags: most recent Senate trade is ${senateMostRecent.toISOString().split("T")[0]}, ` +
+            `fetching Senate since ${senateStartDate.toISOString().split("T")[0]}`
+          );
+        }
       }
     }
   }
 
   console.log(`\nFetching new trades via ${provider.getName()}...`);
 
-  const newSenateTrades = await provider.fetchSenateTrades(startDate);
+  const newSenateTrades = await provider.fetchSenateTrades(senateStartDate ?? startDate);
 
   let newHouseTrades: FMPTrade[];
   try {

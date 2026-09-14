@@ -24,23 +24,14 @@ function createMarketDataProvider(cacheOnly: boolean) {
   }
   return createEdgarProvider(cacheOnly);
 }
-import { buildHtmlReport, buildPartyPage, buildMemberPage, buildScoreLookup } from "../output/html.js";
+import { buildHtmlReport, buildPartyPage, buildMemberPage, buildScoreLookup, type MemberLinker } from "../output/html.js";
+import { createMemberResolver } from "../output/member-identity.js";
 import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest } from "../output/index-page.js";
 import { publishOutput } from "../publish.js";
 import { loadData, getLatestReport } from "../utils/storage.js";
 import type { FMPTrade } from "../types/index.js";
 
 const DEFAULT_WEB_DIR = "output/web";
-
-/**
- * Strip middle initials (e.g. "David J." -> "David") so a member whose disclosure
- * forms inconsistently include a middle initial still gets one member page instead
- * of splitting across "David Taylor" and "David J. Taylor".
- */
-function stripMiddleInitial(first: string): string {
-  const parts = first.trim().split(/\s+/).filter((part) => !/^[a-zA-Z]\.?$/.test(part));
-  return parts.length > 0 ? parts.join(" ") : first.trim();
-}
 
 function formatDate(date: Date): string {
   return date.toLocaleDateString("en-US", {
@@ -247,24 +238,24 @@ export const reportHtmlCommand = new Command("report:html")
         .sort((a, b) => (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? ""));
 
       // ── Member pages (built first so we know which files exist) ─────────
-      type MemberKey = string;
-      const memberMap = new Map<MemberKey, {
+      // One resolver decides page identity for both page generation and every
+      // link to a member page, so the two can never disagree.
+      const resolveMember = createMemberResolver(committeeData?.legislators);
+      const memberMap = new Map<string, {
         name: string; chamber: string; party: string | undefined;
         trades: Array<{ trade: FMPTrade; party: string | undefined }>;
       }>();
 
       for (const item of allPartyTrades) {
-        const { trade } = item;
-        if (!trade.firstName && !trade.lastName) continue;
-        const name = `${stripMiddleInitial(trade.firstName ?? "")} ${trade.lastName ?? ""}`.trim();
-        const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-        if (!memberMap.has(key)) {
-          const chamber = report.scoredTrades.find(
-            (t) => `${stripMiddleInitial(t.trade.firstName ?? "")} ${t.trade.lastName ?? ""}`.trim() === name
-          )?.chamber === "senate" ? "Sen." : "Rep.";
-          memberMap.set(key, { name, chamber, party: item.party, trades: [] });
+        const identity = resolveMember(item.trade);
+        if (!identity) continue;
+        if (!memberMap.has(identity.key)) {
+          const chamber = identity.chamber ?? (report.scoredTrades.find(
+            (t) => resolveMember(t.trade)?.key === identity.key
+          )?.chamber === "senate" ? "Sen." : "Rep.");
+          memberMap.set(identity.key, { name: identity.name, chamber, party: item.party, trades: [] });
         }
-        memberMap.get(key)!.trades.push(item);
+        memberMap.get(identity.key)!.trades.push(item);
       }
 
       const memberPageFiles = new Set<string>();
@@ -280,6 +271,7 @@ export const reportHtmlCommand = new Command("report:html")
             (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? "")
           ),
           dateLabel: label,
+          memberSlug: key,
           reportUrl: reportFile,
           indexUrl: "../index.html",
           exchangeMap,
@@ -290,6 +282,12 @@ export const reportHtmlCommand = new Command("report:html")
         memberCount++;
       }
       console.log(`   Members → ${memberCount} pages generated`);
+
+      const memberLink: MemberLinker = (trade) => {
+        const identity = resolveMember(trade);
+        const file = identity ? `member-${identity.key}.html` : null;
+        return file && memberPageFiles.has(file) ? file : null;
+      };
 
       // ── Party pages ──────────────────────────────────────────────────────
       const partyGroups: Array<{ key: string; label: string; file: string }> = [
@@ -314,7 +312,7 @@ export const reportHtmlCommand = new Command("report:html")
           reportUrl: reportFile,
           indexUrl: "../index.html",
           exchangeMap,
-          memberPageFiles,
+          memberLink,
           scoreLookup,
           dateStr,
         });
@@ -334,7 +332,7 @@ export const reportHtmlCommand = new Command("report:html")
         indexUrl: "../index.html",
         exchangeMap,
         partyPageUrls,
-        memberPageFiles,
+        memberLink,
         dateStr,
         topWindowDays,
       });

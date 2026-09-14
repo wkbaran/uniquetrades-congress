@@ -267,6 +267,94 @@ function firstNameMatches(searchName: string, memberName: string): boolean {
   return false;
 }
 
+const NAME_NOISE = new Set(["mr", "mrs", "ms", "miss", "dr", "hon", "rep", "sen", "jr", "sr", "ii", "iii", "iv"]);
+
+// Formal name → common short forms, for filings that use a nickname the
+// legislators data doesn't list (e.g. "Richard" vs "Rich", "Matthew" vs "Matt").
+const NICKNAMES: string[][] = [
+  ["william", "bill", "will", "billy"], ["james", "jim", "jimmy", "jamie"],
+  ["richard", "rick", "rich", "dick"], ["david", "dave"], ["daniel", "dan", "danny"],
+  ["elizabeth", "liz", "lizzie", "beth", "betsy"], ["robert", "rob", "bob", "bobby"],
+  ["michael", "mike"], ["thomas", "tom", "tommy"], ["matthew", "matt"],
+  ["rudolph", "rudy"], ["valerie", "val"], ["gregory", "greg"], ["donald", "don"],
+  ["edward", "ed", "eddie"], ["christopher", "chris"], ["joseph", "joe"],
+  ["katherine", "kate", "kathy", "katie"], ["nicholas", "nick"], ["jonathan", "jon"],
+  ["steven", "steve"], ["stephen", "steve"], ["charles", "chuck", "chip"],
+  ["theodore", "ted"], ["frederick", "fred"], ["patrick", "pat"], ["anthony", "tony"],
+];
+
+/** Lowercase, strip accents/punctuation, and drop initials, honorifics and suffixes. */
+export function nameTokens(s: string): string[] {
+  return s
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/["'().,]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 1 && !NAME_NOISE.has(t));
+}
+
+function givenNamesCompatible(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (NICKNAMES.some((g) => g.includes(a) && g.includes(b))) return true;
+  return Math.min(a.length, b.length) >= 3 && (a.startsWith(b) || b.startsWith(a));
+}
+
+function endsWithTokens(tokens: string[], tail: string[]): boolean {
+  return tail.length <= tokens.length && tail.every((t, i) => tokens[tokens.length - tail.length + i] === t);
+}
+
+/**
+ * Resolve a filer name (as written on a disclosure) to a single current legislator.
+ * Requires both a whole-word last-name match and a compatible given name, and
+ * refuses ambiguous results, so different people who share a last name
+ * (Susie/Laurel Lee, Dave/Rich McCormick) never collapse into one.
+ */
+export function resolveLegislator(
+  firstName: string,
+  lastName: string,
+  legislators: Legislator[]
+): Legislator | null {
+  const lastToks = nameTokens(lastName);
+  if (lastToks.length === 0) return null;
+  const rawFirst = firstName.trim();
+
+  let best: Legislator | null = null;
+  let bestScore = 0;
+  let tied = false;
+
+  for (const leg of legislators) {
+    const legLast = nameTokens(leg.name.last);
+    if (legLast.length === 0) continue;
+    // Filers sometimes spill a middle name into the last-name field ("Moore Capito",
+    // "M. Collins") or drop a surname prefix ("Epps" for "Van Epps").
+    let spill: string[];
+    if (endsWithTokens(lastToks, legLast)) spill = lastToks.slice(0, lastToks.length - legLast.length);
+    else if (endsWithTokens(legLast, lastToks)) spill = [];
+    else continue;
+
+    const given = [...nameTokens(rawFirst), ...spill];
+    const primary = nameTokens(leg.name.first)[0];
+    const nick = leg.name.nickname ? nameTokens(leg.name.nickname)[0] : undefined;
+    const legGiven = new Set([
+      ...nameTokens(leg.name.first),
+      ...nameTokens(leg.name.middle ?? ""),
+      ...nameTokens(leg.name.nickname ?? ""),
+      ...nameTokens(leg.name.official_full ?? "").filter((t) => !legLast.includes(t)),
+    ]);
+
+    let score = 0;
+    if (given.length > 0 && (given[0] === primary || given[0] === nick)) score = 3;
+    else if (given.some((g) => [...legGiven].some((l) => givenNamesCompatible(g, l)))) score = 2;
+    else if (/^[a-z]\.?$/i.test(leg.name.first) && rawFirst.toLowerCase().startsWith(leg.name.first[0].toLowerCase())) score = 1;
+    if (score === 0) continue;
+
+    if (score > bestScore) { best = leg; bestScore = score; tied = false; }
+    else if (score === bestScore) tied = true;
+  }
+
+  return tied ? null : best;
+}
+
 /**
  * Find congress member by name in membership data
  * Returns bioguide ID if found
@@ -277,8 +365,15 @@ export function findMemberByName(
   membership: CommitteeMembershipResponse,
   legislators?: Legislator[]
 ): string | null {
+  if (legislators) {
+    const leg = resolveLegislator(firstName, lastName, legislators);
+    if (leg) return leg.id.bioguide;
+  }
+
   const normalizedFirst = firstName.toLowerCase().trim();
   const normalizedLast = lastName.toLowerCase().trim();
+  // Whole-word match: a plain substring check let "Hill" match "Hillary J. Scholten"
+  const lastRe = new RegExp(`(^|[^a-z])${normalizedLast.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`);
 
   // First, search committee membership
   for (const members of Object.values(membership)) {
@@ -286,7 +381,7 @@ export function findMemberByName(
       const memberName = member.name.toLowerCase();
 
       // Must have last name
-      if (!memberName.includes(normalizedLast)) continue;
+      if (!lastRe.test(memberName)) continue;
 
       // Check first name with initial handling
       if (firstNameMatches(normalizedFirst, memberName)) {

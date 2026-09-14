@@ -92,6 +92,9 @@ function normalizeTransactionType(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   const r = raw.toLowerCase();
   if (r.includes("purchase")) return "Purchase";
+  // "partial" must be checked before the generic sale match: House PDFs mark a
+  // partial sale as "S (partial)" and Senate eFD as "Sale (Partial)".
+  if (r.includes("partial")) return "Sale (Partial)";
   if (r.includes("sale") || r === "s") return "Sale (Full)";
   if (r.includes("exchange") || r === "e") return "Exchange";
   return raw;
@@ -316,6 +319,14 @@ async function processHousePtr(
 // ║  SENATE EFD                                                              ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
 
+/** Collect name=value pairs from a response's Set-Cookie headers */
+function readSetCookies(resp: Response, jar: Map<string, string>) {
+  for (const c of resp.headers.getSetCookie()) {
+    const m = c.match(/^\s*([^=;\s]+)=([^;]*)/);
+    if (m) jar.set(m[1], m[2]);
+  }
+}
+
 /** Accept terms and return a session cookie string */
 async function acceptSenatEfdTerms(): Promise<string | null> {
   // Get CSRF token from home page
@@ -323,12 +334,10 @@ async function acceptSenatEfdTerms(): Promise<string | null> {
   if (!homeResp.ok) return null;
   const homeHtml = await homeResp.text();
 
+  const jar = new Map<string, string>();
+  readSetCookies(homeResp, jar);
   const csrf = homeHtml.match(/csrfmiddlewaretoken[^>]*value="([^"]+)"/)?.[1];
-  const setCookie = homeResp.headers.get("set-cookie") || "";
-  const csrfCookie = setCookie.match(/csrftoken=([^;]+)/)?.[1];
-  if (!csrf || !csrfCookie) return null;
-
-  const cookieHeader = `csrftoken=${csrfCookie}`;
+  if (!csrf || !jar.has("csrftoken")) return null;
 
   // POST acceptance
   const acceptResp = await fetchWithUA(SENATE_HOME_URL, {
@@ -336,48 +345,74 @@ async function acceptSenatEfdTerms(): Promise<string | null> {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       "Referer": SENATE_HOME_URL,
-      "Cookie": cookieHeader,
+      "Cookie": `csrftoken=${jar.get("csrftoken")}`,
     },
     body: `prohibition_agreement=1&csrfmiddlewaretoken=${encodeURIComponent(csrf)}`,
     redirect: "manual",
   });
 
-  const sessionCookie = acceptResp.headers.get("set-cookie")?.match(/sessionid=([^;]+)/)?.[1];
-  if (!sessionCookie) {
-    // Try reading session from subsequent redirect cookie
-    return cookieHeader;
-  }
-  return `${cookieHeader}; sessionid=${sessionCookie}`;
+  // The acceptance response may rotate csrftoken and sets sessionid; later
+  // values win over the home-page ones.
+  readSetCookies(acceptResp, jar);
+  const parts = ["csrftoken", "sessionid"]
+    .filter((k) => jar.has(k))
+    .map((k) => `${k}=${jar.get(k)}`);
+  return parts.join("; ");
+}
+
+/** Format a date as the eFD search form expects: "MM/DD/YYYY 00:00:00" */
+function formatEfdDate(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${mm}/${dd}/${d.getFullYear()} 00:00:00`;
 }
 
 async function fetchSenatePtrGuids(
   cookie: string,
   sinceDate: Date
 ): Promise<Array<{ guid: string; firstName: string; lastName: string; filedDate: string }>> {
-  // The AJAX search API returns JSON with PTR (report type 11) filings, sorted
-  // newest-first. It's paginated server-side (DataTables-style limit/offset),
-  // so a single fixed-size page silently drops anything past it whenever more
-  // than `pageSize` filings exist in the requested window — keep paging until
-  // a short page confirms we've reached the end (or an old-enough filing does).
-  const pageSize = 200;
-  const maxPages = 25; // 5,000 filings — far beyond any realistic window
+  // The AJAX search API is a DataTables endpoint: POST form data with
+  // start/length paging, filtered server-side by submission date. (GET
+  // requests return 503.) Rows come back newest-first as arrays of
+  // [first, last, office, linkHtml, filedDate].
+  const pageSize = 100;
+  const maxPages = 50; // 5,000 filings — far beyond any realistic window
+  const csrf = cookie.match(/csrftoken=([^;]+)/)?.[1] ?? "";
   const results: Array<{ guid: string; firstName: string; lastName: string; filedDate: string }> = [];
+  let paperSkipped = 0;
 
   for (let page = 0; page < maxPages; page++) {
-    const offset = page * pageSize;
-    const searchUrl = `${SENATE_SEARCH_URL}?report_types%5B%5D=11&limit=${pageSize}&offset=${offset}&order_by=-date_received`;
+    const start = page * pageSize;
+    const body = new URLSearchParams({
+      start: String(start),
+      length: String(pageSize),
+      report_types: "[11]",
+      filer_types: "[]",
+      submitted_start_date: formatEfdDate(sinceDate),
+      submitted_end_date: "",
+      candidate_state: "",
+      senator_state: "",
+      office_id: "",
+      first_name: "",
+      last_name: "",
+      csrfmiddlewaretoken: csrf,
+    });
 
-    const resp = await fetchWithUA(searchUrl, {
+    const resp = await fetchWithUA(SENATE_SEARCH_URL, {
+      method: "POST",
       headers: {
         "X-Requested-With": "XMLHttpRequest",
         "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
         "Referer": "https://efdsearch.senate.gov/search/",
+        "X-CSRFToken": csrf,
         "Cookie": cookie,
       },
+      body,
     });
 
     if (!resp.ok) {
-      log("Senate", `  Search API returned ${resp.status} — skipping (API may be in maintenance)`);
+      log("Senate", `  ⚠️  Search API returned HTTP ${resp.status} — Senate filings NOT fetched this run`);
       break;
     }
 
@@ -385,41 +420,50 @@ async function fetchSenatePtrGuids(
     try {
       json = await resp.json();
     } catch {
-      log("Senate", "  Search API returned non-JSON — skipping");
+      log("Senate", "  ⚠️  Search API returned non-JSON — Senate filings NOT fetched this run");
       break;
     }
 
-    const data = (json as { data?: unknown[] }).data ?? [];
+    const { data = [], recordsFiltered } = json as { data?: unknown[]; recordsFiltered?: number };
     if (data.length === 0) break;
 
     let hasOld = false;
     for (const row of data) {
-      const r = row as { first_name?: string; last_name?: string; filed_date?: string; link?: string[] };
-      const link = r.link?.[0] || r.link?.[1] || "";
+      let firstName: string, lastName: string, link: string, filedDate: string;
+      if (Array.isArray(row)) {
+        [firstName = "", lastName = "", , link = "", filedDate = ""] = row as string[];
+      } else {
+        const r = row as { first_name?: string; last_name?: string; filed_date?: string; link?: string[] };
+        firstName = r.first_name || "";
+        lastName = r.last_name || "";
+        link = r.link?.[0] || r.link?.[1] || "";
+        filedDate = r.filed_date || "";
+      }
+
+      // Paper filings are scanned images with no parseable transaction table
+      if (/\/paper\//.test(link)) { paperSkipped++; continue; }
       const guidM = link.match(/\/ptr\/([a-f0-9-]+)\//);
       if (!guidM) continue;
 
-      const filedDate = r.filed_date || "";
       if (filedDate) {
         const d = new Date(filedDate);
         if (!isNaN(d.getTime()) && d < sinceDate) { hasOld = true; continue; }
       }
 
-      results.push({
-        guid: guidM[1],
-        firstName: r.first_name || "",
-        lastName: r.last_name || "",
-        filedDate,
-      });
+      results.push({ guid: guidM[1], firstName, lastName, filedDate });
     }
 
-    if (data.length < pageSize || hasOld) break;
+    const total = recordsFiltered ?? Infinity;
+    if (data.length < pageSize || start + data.length >= total || hasOld) break;
   }
 
+  if (paperSkipped > 0) {
+    log("Senate", `  Skipped ${paperSkipped} paper (scanned) filing(s) — not machine-readable`);
+  }
   return results;
 }
 
-function parseSenatePtrPage(html: string): {
+export function parseSenatePtrPage(html: string): {
   memberName?: string;
   filingDate?: string;
   transactions: Array<{
@@ -437,10 +481,11 @@ function parseSenatePtrPage(html: string): {
   const flags: string[] = [];
 
   // Extract member name from title
-  const memberM = html.match(/Periodic Transaction Report for[\s\S]*?The Honorable ([^\n(]+)/);
-  const memberName = memberM ? memberM[1].trim() : undefined;
+  // The name is split across lines in the markup ("The Honorable John\n  Boozman")
+  const memberM = html.match(/The Honorable\s+([^<(]+)/);
+  const memberName = memberM ? memberM[1].replace(/\s+/g, " ").trim() : undefined;
 
-  const filingM = html.match(/Filed (\d{2}\/\d{2}\/\d{4})/);
+  const filingM = html.match(/Filed\s+(\d{2}\/\d{2}\/\d{4})/);
   const filingDate = filingM ? filingM[1] : undefined;
 
   // Strip tags for text parsing
@@ -470,40 +515,46 @@ function parseSenatePtrPage(html: string): {
   // Each row: number, date, owner, ticker, asset, type, txntype, amount, comment
   // The numbers are sequential: 1, 2, 3...
   // Dates match MM/DD/YYYY
-  const rowRe = /\d+\s+(\d{2}\/\d{2}\/\d{4})\s+(Self|Joint|Spouse|Dependent Child)\s+(\S+)\s+([^\n]+?)\s+(Stock|Option|Other|Bond|ETF|Cryptocurrency|Mutual Fund(?:\s+\(Not ETF\))?)\s+(Purchase|Sale \(Full\)|Sale \(Partial\)|Exchange)\s+(\$[^\n]+?)\s+(--[^\n]*|[^\n]{0,100})/g;
+  // Read the table cell-by-cell, keyed by its header row. Matching the flattened
+  // text with a regex broke on owners ("Child") and asset types ("Non-Public
+  // Stock", "Corporate Bond") it didn't enumerate.
+  const decodeCell = (cell: string) => cell
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&#35;/g, "#")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  let rm: RegExpExecArray | null;
-  while ((rm = rowRe.exec(txSection)) !== null) {
-    const ticker = rm[3] === "--" ? "" : rm[3];
-    transactions.push({
-      transactionDate: rm[1],
-      owner: rm[2],
-      ticker,
-      assetDescription: rm[4].trim(),
-      assetType: rm[5].trim(),
-      transactionType: rm[6].trim(),
-      amount: rm[7].trim(),
-      comment: rm[8].trim(),
-    });
-  }
+  for (const table of html.match(/<table[\s\S]*?<\/table>/gi) ?? []) {
+    const rows = (table.match(/<tr[\s\S]*?<\/tr>/gi) ?? [])
+      .map((tr) => (tr.match(/<t[dh][^>]*>[\s\S]*?<\/t[dh]>/gi) ?? []).map(decodeCell));
+    const header = rows[0]?.map((h) => h.toLowerCase()) ?? [];
+    const col = (name: string) => header.indexOf(name);
+    const iDate = col("transaction date");
+    if (iDate < 0) continue;
+    const [iOwner, iTicker, iAsset, iAssetType, iType, iAmount, iComment] =
+      ["owner", "ticker", "asset name", "asset type", "type", "amount", "comment"].map(col);
 
-  // Fallback: look for simpler date+ticker pattern if structured parse fails
-  if (transactions.length === 0) {
-    const simpleDateRe = /(\d{2}\/\d{2}\/\d{4})\s+(Self|Joint|Spouse|Dependent Child)\s+([A-Z\--.]{1,10})\s+/g;
-    while ((rm = simpleDateRe.exec(txSection)) !== null) {
+    for (const cells of rows.slice(1)) {
+      const date = cells[iDate] ?? "";
+      if (!/^\d{2}\/\d{2}\/\d{4}$/.test(date)) continue;
+      const ticker = cells[iTicker] ?? "";
       transactions.push({
-        transactionDate: rm[1],
-        owner: rm[2],
-        ticker: rm[3] === "--" ? "" : rm[3],
-        assetDescription: "",
-        assetType: "Stock",
-        transactionType: "Purchase",
-        amount: "",
-        comment: "",
+        transactionDate: date,
+        owner: cells[iOwner] ?? "",
+        ticker: ticker === "--" ? "" : ticker,
+        assetDescription: cells[iAsset] ?? "",
+        assetType: cells[iAssetType] ?? "",
+        transactionType: cells[iType] ?? "",
+        amount: cells[iAmount] ?? "",
+        comment: cells[iComment] ?? "",
       });
-    }
-    if (transactions.length > 0) {
-      flags.push("Used fallback parser — transaction details may be incomplete");
     }
   }
 

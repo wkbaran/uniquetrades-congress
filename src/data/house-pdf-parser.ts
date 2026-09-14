@@ -478,6 +478,10 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
   const txnTypeMap: Record<string, string> = {
     P: "Purchase", S: "Sale", E: "Exchange", G: "Gift", O: "Other",
   };
+  // Partial sales are coded "S (partial)" — a type cell, not an asset description.
+  const partialSaleRe = /^S\s*\(\s*partial\s*\)\s*/i;
+  const txnTypeOf = (s: string): string | undefined =>
+    txnTypeMap[s] ?? (partialSaleRe.test(s) && s.replace(partialSaleRe, "") === "" ? "Sale (Partial)" : undefined);
 
   // Merge adjacent amount fragments ("$15,001 -" + "$50,000" → "$15,001 - $50,000")
   const mergedBlocks: string[] = [];
@@ -492,6 +496,8 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
 
   // Walk through merged blocks collecting transaction rows
   // A row typically looks like: [description] [ticker] [type] [txn-type] [date] [date] [amount] [gains]
+  // A type cell can land ahead of its row's asset description; hold it for the next row.
+  let pendingType: string | undefined;
   let i = 0;
   while (i < mergedBlocks.length) {
     const block = mergedBlocks[i];
@@ -518,6 +524,14 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
       i++; continue;
     }
 
+    // Only the multi-word partial code is carried forward; a bare P/S here is
+    // more likely stray form noise than a displaced type cell.
+    const standaloneType = txnTypeOf(block);
+    if (standaloneType) {
+      if (partialSaleRe.test(block)) pendingType = standaloneType;
+      i++; continue;
+    }
+
     // Check if this looks like an asset description (substantial text, not a date/amount/ticker)
     if (
       block.length > 5 &&
@@ -525,11 +539,12 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
       !amountRe.test(block) &&
       !tickerRe.test(block) &&
       !assetTypeRe.test(block) &&
-      !txnTypeMap[block] &&
       block !== "F" && block.length > 2
     ) {
       // Looks like the start of a transaction row
       const tx: HousePtrTransaction = { assetDescription: block };
+      const rowPendingType = pendingType;
+      pendingType = undefined;
 
       // Peek at following blocks to fill in transaction fields
       let j = i + 1;
@@ -545,7 +560,7 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
         // Guard against reassignment: stray single-char noise from unrelated form
         // fields can land in the data font and coincidentally match P/S/E/G/O,
         // silently overwriting an already-correctly-parsed transaction type.
-        if (!tx.transactionType && txnTypeMap[next]) { tx.transactionType = txnTypeMap[next]; j++; continue; }
+        if (!tx.transactionType && txnTypeOf(next)) { tx.transactionType = txnTypeOf(next); j++; continue; }
         // Owner codes: Sp/SP=spouse, DC=dependent child, JT=joint
         if (next.match(/^(Sp|SP|DC|JT)$/i)) { tx.owner = next.toLowerCase() === "sp" ? "Spouse" : next; j++; continue; }
         // Ticker embedded in asset description as "Something (TICK)" — extract
@@ -584,6 +599,11 @@ export async function parseHousePtrPdf(pdfBytes: Buffer): Promise<ParsedPtr> {
       }
 
       if (tx.transactionDate || tx.amount || tx.ticker) {
+        if (partialSaleRe.test(tx.assetDescription)) {
+          tx.assetDescription = tx.assetDescription.replace(partialSaleRe, "");
+          tx.transactionType ??= "Sale (Partial)";
+        }
+        tx.transactionType ??= rowPendingType;
         // Extract ticker embedded at end of asset description: "...Common Stock (TMO)"
         if (!tx.ticker) {
           const embedded = tx.assetDescription.match(/\(([A-Z]{1,5})\)\s*$/);

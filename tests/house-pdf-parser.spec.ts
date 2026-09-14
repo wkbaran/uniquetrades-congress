@@ -72,6 +72,28 @@ test("bond-dates PTR: never mistakes an embedded maturity/call date for the tran
   }
 });
 
+test("partial-sales PTR: 'S (partial)' is a transaction type, never an asset row", async () => {
+  // Real filing: Gilbert Cisneros, docId 20035390. The "S (partial)" type cell used
+  // to be read as an asset description, creating phantom untickered rows that
+  // stole the date/amount of the real row (e.g. Crown Castle ended up undated).
+  const parsed = await parseHousePtrPdf(fixture("house-ptr-partial-sales.pdf"));
+
+  expect(parsed.transactions).toHaveLength(58);
+  expect(parsed.transactions.filter((t) => /partial/i.test(t.assetDescription))).toHaveLength(0);
+  expect(parsed.transactions.filter((t) => !t.transactionDate)).toHaveLength(0);
+  expect(parsed.transactions.filter((t) => t.transactionType === "Unknown")).toHaveLength(0);
+  expect(parsed.transactions.filter((t) => t.transactionType === "Sale (Partial)")).toHaveLength(16);
+
+  const cci = parsed.transactions.find((t) => t.ticker === "CCI");
+  expect(cci?.transactionType).toBe("Sale (Partial)");
+  expect(cci?.transactionDate).toBe("08/18/2026");
+  expect(cci?.amount).toBe("$1,001 - $15,000");
+
+  const aort = parsed.transactions.find((t) => t.ticker === "AORT");
+  expect(aort?.assetDescription).toBe("Artivion, Inc. Common Stock (AORT)");
+  expect(aort?.transactionType).toBe("Purchase");
+});
+
 test("bond-dates PTR: transaction type isn't clobbered by stray PDF noise later in the row", async () => {
   // Every row in this filing is coded "P" (Purchase) in the source PDF except
   // one "S" (Sale); stray single-character noise from unrelated form fields
