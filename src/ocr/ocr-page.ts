@@ -142,13 +142,19 @@ function cleanTicker(raw: string | null | undefined): string | undefined {
   return /^[A-Z]{1,5}(?:[./-][A-Z])?$/.test(t) ? t : undefined;
 }
 
-export function validateRows(rows: OcrRow[], now = new Date()): Validation {
+/**
+ * @param earliest YYYY-MM-DD; transaction dates before it are rejected as misreads
+ *   (e.g. a date well before the filing was submitted)
+ */
+export function validateRows(rows: OcrRow[], now = new Date(), earliest?: string): Validation {
   const valid: ValidRow[] = [];
   const rejected: RejectedRow[] = [];
   let skipped = 0;
 
   for (const row of rows) {
-    if (!row.transactionDate && !row.amount && !row.type) {
+    // Header rows, the sample row both paper forms print ("Example Mega Corp", IBM "EXAMPLE"),
+    // and cover-page notes that point to attached statements
+    if ((!row.transactionDate && !row.amount && !row.type) || /\bexample\b|please see (the )?attached/i.test(String(row.asset ?? ""))) {
       skipped++;
       continue;
     }
@@ -169,6 +175,7 @@ export function validateRows(rows: OcrRow[], now = new Date()): Validation {
     const problems: string[] = [];
     if (!asset) problems.push("missing asset name");
     if (!date) problems.push(`unreadable or implausible date "${row.transactionDate ?? ""}"`);
+    else if (earliest && date < earliest) problems.push(`date ${date} is implausibly long before the filing`);
     if (!amount) problems.push(`unrecognized amount "${row.amount ?? ""}"`);
     if (!type) problems.push(`unrecognized type "${row.type ?? ""}"`);
     if (problems.length > 0 || !date || !amount || !type) {
@@ -237,6 +244,7 @@ E $250,001 - $500,000; F $500,001 - $1,000,000; G $1,000,001 - $5,000,000;
 H $5,000,001 - $25,000,000; I $25,000,001 - $50,000,000; J Over $50,000,000;
 K Spouse/DC Amount over $1,000,000. Use the range text, not the letter.
 Section header rows that name an account or trust but have no date are not transactions.
+The printed example row (for instance "Example Mega Corp Common Stock") is not a transaction.
 If the page has no transaction rows, return []. Do not guess values you cannot read; use null.`,
   senate: `This is a scanned page of a U.S. Senate Periodic Transaction Report ("Periodic Disclosure of Financial Transactions").
 Transcribe every numbered transaction row. Return ONLY a JSON array; each element:

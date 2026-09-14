@@ -6,7 +6,7 @@ import {
   normalizeAmount, normalizeDate, normalizeType, validateRows, pageQuality, parseModelResponse,
 } from "../src/ocr/ocr-page.js";
 import { pagesFromDocument, rotationCandidates } from "../src/ocr/render.js";
-import { enabledOcrChambers, mergeOcrTrades, type FilingOcrOutcome } from "../src/ocr/ocr-filings.js";
+import { earliestPlausibleDate, enabledOcrChambers, mergeOcrTrades, type FilingOcrOutcome } from "../src/ocr/ocr-filings.js";
 
 test("OCR covers House and Senate scans by default, and OCR_CHAMBERS can narrow it", () => {
   expect(enabledOcrChambers({})).toEqual(["house", "senate"]);
@@ -68,6 +68,34 @@ test("validation skips header rows, rejects unreadable rows, and strips Senate o
   expect(result.valid.find((r) => r.asset.startsWith("Apple"))?.ticker).toBe("AAPL");
   expect(pageQuality(result, true)).toBe(0.75);
   expect(pageQuality({ valid: [], rejected: [], skipped: 0 }, true)).toBe(1);
+});
+
+test("the forms' printed example rows are never treated as transactions", () => {
+  // Real OCR output from Harold Rogers, docId 9116218: the House form's sample row validated as a 2012 trade
+  const result = validateRows([
+    { asset: "Example Mega Corp Common Stock", type: "P", transactionDate: "08/14/2012", amount: "$50,001 - $100,000" },
+    { asset: "IBM Corp. (stock) NYSE EXAMPLE", type: "P", transactionDate: "2/1/13", amount: "$15,001 - $50,000" },
+    { asset: "Examplar Holdings Inc", type: "P", transactionDate: "03/02/2026", amount: "$1,001 - $15,000" },
+  ], NOW);
+  expect(result.skipped).toBe(2);
+  expect(result.valid.map((r) => r.asset)).toEqual(["Examplar Holdings Inc"]);
+
+  // Khanna cover pages carry a note row, dated with the form's example date
+  expect(validateRows([{ asset: "Please see the attached.", type: "P", transactionDate: "2/5/15", amount: "$15,001 - $50,000" }], NOW).skipped).toBe(1);
+});
+
+test("dates implausibly long before the filing are rejected as misreads", () => {
+  // Real OCR output from Diana Harshbarger, docId 9116256 (filed 8/3/2026): an Exxon row read as 2020
+  const earliest = earliestPlausibleDate("8/3/2026");
+  expect(earliest).toBe("2023-08-03");
+  expect(earliestPlausibleDate("")).toBeUndefined();
+
+  const result = validateRows([
+    { asset: "Exxon Mobil Corp Comm Stock", type: "P", transactionDate: "02/05/2020", amount: "$15,001 - $50,000" },
+    { asset: "Southeast Energy Auth Co RV", type: "P", transactionDate: "07/17/2026", amount: "$15,001 - $50,000" },
+  ], NOW, earliest);
+  expect(result.valid.map((r) => r.asset)).toEqual(["Southeast Energy Auth Co RV"]);
+  expect(result.rejected[0].problems[0]).toContain("implausibly long before");
 });
 
 test("model responses parse from strict JSON, fenced JSON, or a bare array", () => {

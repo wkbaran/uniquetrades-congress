@@ -10,7 +10,7 @@ import { loadData, saveData } from "../utils/storage.js";
 import { acceptSenatEfdTerms, fetchWithUA, splitMemberName, type ReviewFiling } from "../data/government-provider.js";
 import { pagesFromDocument, rotationCandidates, type PageSource, type RenderedPage, type Rotation } from "./render.js";
 import {
-  checkOllama, ocrOptionsFromEnv, ocrPage, pageQuality, validateRows, MIN_PAGE_QUALITY,
+  checkOllama, normalizeDate, ocrOptionsFromEnv, ocrPage, pageQuality, validateRows, MIN_PAGE_QUALITY,
   type FormKind, type OcrOptions, type PageOcr, type ValidRow, type Validation,
 } from "./ocr-page.js";
 
@@ -143,7 +143,17 @@ interface PageAttempt {
 }
 
 /** OCR a page at its most likely orientation, falling back to the alternative when the result reads badly. */
-async function ocrPageWithRotations(page: PageSource, form: FormKind, ocr: OcrOptions) {
+/**
+ * Earliest believable transaction date for a filing: PTRs are due within 45 days and late
+ * filings run months, not years, so anything over 3 years before filing is a misread
+ * (often the date printed on the form's example row).
+ */
+export function earliestPlausibleDate(filingDate: string): string | undefined {
+  const iso = normalizeDate(filingDate);
+  return iso ? `${Number(iso.slice(0, 4)) - 3}${iso.slice(4)}` : undefined;
+}
+
+async function ocrPageWithRotations(page: PageSource, form: FormKind, ocr: OcrOptions, earliest?: string) {
   let best: PageAttempt | undefined;
   let attempts = 0;
   let seconds = 0;
@@ -154,7 +164,7 @@ async function ocrPageWithRotations(page: PageSource, form: FormKind, ocr: OcrOp
     attempts++;
     seconds += result.seconds;
 
-    const validation = validateRows(result.rows);
+    const validation = validateRows(result.rows, undefined, earliest);
     const quality = result.error ? 0 : pageQuality(validation, result.readable);
     if (!best || quality > best.quality) best = { rotation, image, ocr: result, validation, quality };
 
@@ -231,7 +241,7 @@ export async function ocrFiling(
 
   for (let i = 0; i < pages.length; i++) {
     const pageNo = i + 1;
-    const attempt = await ocrPageWithRotations(pages[i], filing.chamber, ocr);
+    const attempt = await ocrPageWithRotations(pages[i], filing.chamber, ocr, earliestPlausibleDate(filing.filingDate));
     const { valid, rejected, skipped } = attempt.validation;
 
     let status: PageStatus;
