@@ -6,7 +6,13 @@ import {
   normalizeAmount, normalizeDate, normalizeType, validateRows, pageQuality, parseModelResponse,
 } from "../src/ocr/ocr-page.js";
 import { pagesFromDocument, rotationCandidates } from "../src/ocr/render.js";
-import { mergeOcrTrades, type FilingOcrOutcome } from "../src/ocr/ocr-filings.js";
+import { enabledOcrChambers, mergeOcrTrades, type FilingOcrOutcome } from "../src/ocr/ocr-filings.js";
+
+test("OCR covers House and Senate scans by default, and OCR_CHAMBERS can narrow it", () => {
+  expect(enabledOcrChambers({})).toEqual(["house", "senate"]);
+  expect(enabledOcrChambers({ OCR_CHAMBERS: "senate" })).toEqual(["senate"]);
+  expect(enabledOcrChambers({ OCR_CHAMBERS: " House , bogus " })).toEqual(["house"]);
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const NOW = new Date("2026-09-13T12:00:00");

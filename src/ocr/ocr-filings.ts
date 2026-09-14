@@ -68,12 +68,12 @@ export interface FilingOcrOutcome {
 export const filingKey = (f: { chamber: string; id: string }) => `${f.chamber}:${f.id}`;
 
 /**
- * OCR is only enabled for chambers whose forms it reads reliably (OCR_CHAMBERS, default
- * "house"). On a hand-checked Senate paper page it misread 3 of 10 rows (second amount
- * column read as the first, sales as purchases), while House test pages were 51/51.
+ * Chambers whose scanned filings are OCR'd (OCR_CHAMBERS, default both). OCR is the last
+ * resort for any filing without machine-readable transactions: an imperfect row marked
+ * OCR in the report is easier to notice and fix than a trade that's silently missing.
  */
 export function enabledOcrChambers(env: NodeJS.ProcessEnv = process.env): Array<"house" | "senate"> {
-  return (env.OCR_CHAMBERS ?? "house")
+  return (env.OCR_CHAMBERS ?? "house,senate")
     .split(",")
     .map((c) => c.trim().toLowerCase())
     .filter((c): c is "house" | "senate" => c === "house" || c === "senate");
@@ -188,7 +188,8 @@ function toTrade(row: ValidRow, filing: ReviewFiling, page: number): FMPTrade {
 /**
  * OCR every page of one filing. Every page's raw model output and validation go to
  * `logs/ocr/<chamber>-<id>/page-N.json`; pages needing a human look also get their
- * rendered image. Only rows from pages that pass validation become trades.
+ * rendered image. Every row that validates becomes a trade, including rows on pages
+ * flagged for review, so a hard-to-read page yields its readable rows instead of none.
  */
 export async function ocrFiling(
   filing: ReviewFiling,
@@ -265,7 +266,7 @@ export async function ocrFiling(
       )
     );
     if (status === "needs-review" || status === "error") await fs.writeFile(`${artifact}.png`, attempt.image.png);
-    if (status === "ok") trades.push(...valid.map((row) => toTrade(row, filing, pageNo)));
+    if (status === "ok" || status === "needs-review") trades.push(...valid.map((row) => toTrade(row, filing, pageNo)));
 
     log(
       `    page ${pageNo}/${pages.length}  ${status.toUpperCase().padEnd(12)} rot=${attempt.rotation}` +

@@ -457,10 +457,10 @@ How a filing is processed:
 
 1. Each page is rendered to PNG with MuPDF. Pages scanned sideways (portrait for the landscape House form, or the reverse for the Senate form) are rotated first, because the model reads a sideways page into confident but wrong rows.
 2. The model returns rows as JSON. A row becomes a trade only if its transaction date, amount range, and purchase/sale type all normalize to known values; account header rows are skipped.
-3. A page is trusted when at least 80% of its rows validate. Rows from pages below that are withheld and the page is flagged for review.
+3. Every validated row is used. A page where fewer than 80% of rows validate is flagged for review in the log, but its readable rows still go into the data: an imperfect row is easier to notice in the report than a trade that's missing.
 4. Validated rows are stored with `source: "ocr"` and shown with an **OCR** badge in the report. A cleanly OCR'd filing replaces any rows stored for it; a filing with pages needing review only adds rows when nothing is stored for it yet.
 
-Only House filings are OCR'd by default (`OCR_CHAMBERS=house`). On hand-checked test pages the House form was transcribed with every field correct (51 of 51 rows), but a Senate paper page had 3 of 10 rows wrong (amount column and purchase/sale misread), so Senate paper filings stay on the review list until a model reads that form reliably. Pass `--chamber senate` or `--filing <id>` to the catch-up command to OCR them anyway, e.g. to test a new model.
+House and Senate scans are treated the same (`OCR_CHAMBERS=house,senate` by default). Accuracy differs by form: hand-checked House pages were transcribed with every field correct (71 of 71 rows), while a Senate paper page had 3 of 10 rows wrong (amount column and purchase/sale misread). Look for the OCR badge when a Senate paper filer's numbers seem off, and compare against the linked filing.
 
 Structured output is deliberately not used: constraining the model with Ollama's JSON-schema `format` made it misread the amount column on 10 of 25 rows of a test page.
 
