@@ -27,7 +27,9 @@ function createMarketDataProvider(cacheOnly: boolean) {
 }
 import { buildHtmlReport, buildPartyPage, buildMemberPage, buildScoreLookup, type MemberLinker } from "../output/html.js";
 import { createMemberResolver } from "../output/member-identity.js";
-import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest } from "../output/index-page.js";
+import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest, previousFilingBaseline } from "../output/index-page.js";
+import type { ManifestSymbol } from "../output/index-page.js";
+import { createNewlyDisclosedPredicate, filingDateIso, maxFilingDate } from "../utils/filing-date.js";
 import { publishOutput } from "../publish.js";
 import { loadData, getLatestReport, getDataAge } from "../utils/storage.js";
 import type { FMPTrade } from "../types/index.js";
@@ -244,10 +246,52 @@ export const reportHtmlCommand = new Command("report:html")
 
       console.log(`\n📄 Building HTML report: ${dateStr}/report.html`);
 
-      const topSymbols = report.summary.topByScore
-        .slice(0, 8)
-        .map((t) => t.trade.symbol)
-        .filter((s): s is string => !!s);
+      // ── What is new since the previous run ───────────────────────────────
+      // Filings lag transactions by ~a month, so new disclosures land in the
+      // middle of the date-sorted tables, never at the top. Comparing filing
+      // dates against the previous run's high-water mark is what makes them
+      // findable — as gold rows here and as chips on the archive page.
+      const priorManifest = await loadManifest(webDir);
+      const filingBaseline = previousFilingBaseline(priorManifest, dateStr);
+      const isNewlyDisclosed = createNewlyDisclosedPredicate(filingBaseline);
+      const runMaxFiling = maxFilingDate(allTrades);
+
+      const newlyDisclosed = allTrades.filter(isNewlyDisclosed);
+      console.log(
+        filingBaseline
+          ? `   Newly disclosed since ${filingBaseline}: ${newlyDisclosed.length} trade${newlyDisclosed.length !== 1 ? "s" : ""}`
+          : "   No prior filing baseline in manifest - nothing marked new this run"
+      );
+
+      // Chips preview the run's new disclosures, deduped by symbol+side so one
+      // member unloading a position in six tranches does not fill the row.
+      // Symbol-less rows (bonds, options, unparsed OCR) are skipped rather than
+      // sliced off, so eight slots always yield eight chips when eight exist.
+      const chipSource = filingBaseline
+        ? newlyDisclosed
+        // Bootstrap: with no baseline nothing can honestly be called new, so
+        // preview the most recently *filed* trades instead of leaving the
+        // archive row bare. Self-corrects once this run records its high-water
+        // mark for the next one to compare against.
+        : [...allTrades]
+            .sort((a, b) => (filingDateIso(b) ?? "").localeCompare(filingDateIso(a) ?? ""));
+
+      const seenChips = new Set<string>();
+      const newSymbols: ManifestSymbol[] = [];
+      for (const trade of chipSource) {
+        const symbol = trade.symbol;
+        if (!symbol) continue;
+        const side: ManifestSymbol["side"] =
+          (trade.type || "").toLowerCase().includes("sale") ? "sale" : "purchase";
+        const key = `${symbol}|${side}`;
+        if (seenChips.has(key)) continue;
+        seenChips.add(key);
+        newSymbols.push({ symbol, side });
+        if (newSymbols.length >= 8) break;
+      }
+
+      // Legacy field: kept populated so anything still reading it keeps working.
+      const topSymbols = newSymbols.map((c) => c.symbol);
 
       const scoreLookup = buildScoreLookup(report);
 
@@ -352,6 +396,7 @@ export const reportHtmlCommand = new Command("report:html")
         memberLink,
         dateStr,
         topWindowDays,
+        isNewlyDisclosed,
       });
 
       await fs.writeFile(path.join(dateDir, reportFile), html, "utf-8");
@@ -364,6 +409,9 @@ export const reportHtmlCommand = new Command("report:html")
         file: reportRelPath,
         totalTrades: report.totalTradesAnalyzed,
         topSymbols,
+        newSymbols,
+        newTrades: newlyDisclosed.length,
+        ...(runMaxFiling ? { maxFilingDate: runMaxFiling } : {}),
       });
 
       const indexHtml = buildIndexPage(manifest);

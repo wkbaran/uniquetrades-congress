@@ -1,12 +1,43 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 
+/** A chip on the archive page: one newly disclosed trade's symbol and side. */
+export interface ManifestSymbol {
+  symbol: string;
+  side: "purchase" | "sale";
+}
+
 export interface ReportManifestEntry {
   date: string;        // ISO date string, e.g. "2026-04-18"
   dateLabel: string;   // Human-readable date the report ran, e.g. "April 13, 2026"
   file: string;        // Relative filename, e.g. "report-2026-04-18.html"
   totalTrades: number;
-  topSymbols: string[]; // Up to 8 top symbols as preview
+  topSymbols: string[]; // Legacy preview (pre-newSymbols runs); kept so old entries still render
+  /** Symbols newly disclosed in this run, with side, for colored chips. */
+  newSymbols?: ManifestSymbol[];
+  /** How many trades this run disclosed that the previous run had not seen. */
+  newTrades?: number;
+  /** High-water filing date for this run — the next run's "what is new" baseline. */
+  maxFilingDate?: string;
+}
+
+/**
+ * The filing high-water mark to treat as "already seen" when building a report
+ * for `date`. Takes the max across all *earlier* runs rather than just the
+ * latest one, so a partial or failed run cannot roll the baseline backwards and
+ * re-flag trades that were already shown as new.
+ */
+export function previousFilingBaseline(
+  manifest: ReportManifestEntry[],
+  date: string
+): string | null {
+  let max: string | null = null;
+  for (const entry of manifest) {
+    if (entry.date >= date) continue;
+    const seen = entry.maxFilingDate;
+    if (seen && (max === null || seen > max)) max = seen;
+  }
+  return max;
 }
 
 const MANIFEST_FILE = "manifest.json";
@@ -95,11 +126,13 @@ const INDEX_CSS = `
     --bg: #1e1e2e; --surface: #313244; --surface2: #45475a;
     --border: #585b70; --text: #cdd6f4; --subtext: #a6adc8;
     --muted: #6c7086; --accent: #89b4fa; --radius: 10px;
+    --sale: #f38ba8; --new: #f9e2af;
   }
   [data-theme="light"] {
     --bg: #eff1f5; --surface: #e6e9ef; --surface2: #dce0e8;
     --border: #bcc0cc; --text: #4c4f69; --subtext: #5c5f77;
     --muted: #9ca0b0; --accent: #1e66f5;
+    --sale: #d20f39; --new: #7d5400;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -140,6 +173,12 @@ const INDEX_CSS = `
     border-radius: 4px; background: rgba(137,180,250,0.12);
     color: var(--accent); border: 1px solid rgba(137,180,250,0.25);
   }
+  /* Sales read red so a run's disclosures can be skimmed by side at a glance. */
+  .chip-sale {
+    background: rgba(243,139,168,0.12);
+    color: var(--sale); border-color: rgba(243,139,168,0.3);
+  }
+  .report-new { color: var(--new); font-weight: 600; }
   .report-link { white-space: nowrap; font-size: 0.83rem; align-self: center; }
   footer {
     text-align: center; font-size: 0.75rem; color: var(--muted);
@@ -188,16 +227,31 @@ function escHtml(s: string): string {
 
 export function buildIndexPage(entries: ReportManifestEntry[]): string {
   const rows = entries.map((e) => {
-    const chips = e.topSymbols
+    // Runs from before newSymbols existed carry only the legacy flat list;
+    // render those uncolored rather than inventing a side we never recorded.
+    const colorize = !!e.newSymbols;
+    const chipSource: ManifestSymbol[] = e.newSymbols
+      ?? e.topSymbols.map((symbol) => ({ symbol, side: "purchase" as const }));
+
+    const chips = chipSource
       .slice(0, 6)
-      .map((s) => `<span class="chip">${escHtml(s)}</span>`)
+      .map((c) => {
+        const cls = colorize && c.side === "sale" ? "chip chip-sale" : "chip";
+        const title = colorize ? ` title="${c.side === "sale" ? "Sale" : "Purchase"}"` : "";
+        return `<span class="${cls}"${title}>${escHtml(c.symbol)}</span>`;
+      })
       .join("");
+
+    const newCount =
+      e.newTrades && e.newTrades > 0
+        ? ` &middot; <span class="report-new">${e.newTrades} newly disclosed</span>`
+        : "";
 
     return `
     <div class="report-item">
       <div class="report-meta">
         <div class="report-date">${escHtml(e.dateLabel)}</div>
-        <div class="report-count">${e.totalTrades} trades</div>
+        <div class="report-count">${e.totalTrades} trades${newCount}</div>
         ${chips ? `<div class="report-chips">${chips}</div>` : ""}
       </div>
       <span class="report-link"><a href="${escHtml(e.file)}">View report \u2192</a></span>

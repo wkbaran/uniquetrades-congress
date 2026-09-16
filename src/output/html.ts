@@ -447,7 +447,8 @@ function renderSaleRow(
   party: string | undefined,
   exchangeMap: Map<string, string>,
   memberLink?: MemberLinker,
-  scoreLookup?: Map<string, AnalyzedTrade>
+  scoreLookup?: Map<string, AnalyzedTrade>,
+  isNew = false
 ): string {
   const rawSym = trade.symbol || "N/A";
   const sym = esc(rawSym);
@@ -474,8 +475,8 @@ function renderSaleRow(
   const flagBadges = analyzed ? traderBadgesHtml(analyzed.score) : "";
 
   return `
-<tr>
-  <td class="sale-date">${date}</td>
+<tr${isNew ? ' class="row-new"' : ""}>
+  <td class="sale-date">${date}${isNew ? ' <span class="new-tag" title="Disclosed since the previous report">NEW</span>' : ""}</td>
   <td class="sale-sym">${symCell}</td>
   <td class="sale-amount">${amount}</td>
   <td class="sale-trader"><div class="trader-cell">${nameHtml}${pLabel ? ` <span class="party-tag ${pClass}" title="${esc(pTitle)}">${pLabel}</span>` : ""}${flagBadges}${derivativeBadge ? ` ${derivativeBadge}` : ""}${ownerPill ? ` ${ownerPill}` : ""}</div></td>
@@ -508,6 +509,8 @@ const CSS = `
     --score-low: #6c7086;
     --party-r: #f38ba8;
     --party-d: #89b4fa;
+    --new: #f9e2af;
+    --new-bg: rgba(249,226,175,0.07);
     --radius: 10px;
     --shadow: 0 2px 12px rgba(0,0,0,0.4);
   }
@@ -531,6 +534,8 @@ const CSS = `
     --score-low: #9ca0b0;
     --party-r: #d20f39;
     --party-d: #1e66f5;
+    --new: #7d5400;
+    --new-bg: rgba(125,84,0,0.07);
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html { font-size: 15px; }
@@ -762,6 +767,25 @@ const CSS = `
     vertical-align: top;
   }
   tr:hover td { background: var(--surface2); }
+  /* Newly disclosed since the previous run. The chronological sort buries these
+     mid-table (filings lag transactions by ~a month), so they are called out in
+     gold rather than reordered. */
+  tr.row-new td { background: var(--new-bg); }
+  tr.row-new td,
+  tr.row-new .sale-date,
+  tr.row-new .sale-amount,
+  tr.row-new .sale-desc,
+  tr.row-new .sale-sym,
+  tr.row-new td a { color: var(--new); }
+  /* Links lose their accent cue inside a gold row, so keep them underlined. */
+  tr.row-new td a { text-decoration: underline; text-underline-offset: 2px; }
+  tr.row-new td:first-child { box-shadow: inset 2px 0 0 var(--new); }
+  .new-tag {
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--new); border: 1px solid var(--new);
+    border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem;
+    vertical-align: 1px;
+  }
   .sale-date  { white-space: nowrap; color: var(--subtext); width: 7rem; }
   .sale-sym   { font-weight: 700; color: var(--accent); width: 5rem; }
   .sale-amount { white-space: nowrap; color: var(--subtext); }
@@ -946,6 +970,8 @@ export interface HtmlReportOptions {
   dateStr?: string;
   /** How many days back from generation time to look when ranking Top Purchases / Committee-Relevant (default 30) */
   topWindowDays?: number;
+  /** True for trades disclosed since the previous run; those rows render gold. */
+  isNewlyDisclosed?: (trade: FMPTrade) => boolean;
 }
 
 export function buildHtmlReport(opts: HtmlReportOptions): string {
@@ -956,6 +982,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     memberLink,
     dateStr = new Date(report.generatedAt).toISOString().split("T")[0],
     topWindowDays = 30,
+    isNewlyDisclosed = () => false,
   } = opts;
 
   const scoreLookup = buildScoreLookup(report);
@@ -1103,7 +1130,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
         <table>
           <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
           <tbody>
-            ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberLink, scoreLookup)).join("\n            ")}
+            ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberLink, scoreLookup, isNewlyDisclosed(trade))).join("\n            ")}
           </tbody>
         </table>
       </div>
@@ -1122,7 +1149,7 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
         <table>
           <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
           <tbody>
-            ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberLink, scoreLookup)).join("\n            ")}
+            ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberLink, scoreLookup, isNewlyDisclosed(trade))).join("\n            ")}
           </tbody>
         </table>
       </div>
