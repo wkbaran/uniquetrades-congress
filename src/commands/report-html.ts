@@ -27,8 +27,8 @@ function createMarketDataProvider(cacheOnly: boolean) {
 }
 import { buildHtmlReport, buildPartyPage, buildMemberPage, buildScoreLookup, type MemberLinker } from "../output/html.js";
 import { createMemberResolver } from "../output/member-identity.js";
-import { buildIndexPage, loadManifest, upsertManifest, rebuildManifest, previousFilingBaseline } from "../output/index-page.js";
-import type { ManifestSymbol } from "../output/index-page.js";
+import { buildIndexPage, buildHomePage, loadManifest, upsertManifest, rebuildManifest, previousFilingBaseline } from "../output/index-page.js";
+import type { ManifestSymbol, ReportManifestEntry } from "../output/index-page.js";
 import { createNewlyDisclosedPredicate, filingDateIso, maxFilingDate } from "../utils/filing-date.js";
 import { publishOutput } from "../publish.js";
 import { loadData, getLatestReport, getDataAge } from "../utils/storage.js";
@@ -60,6 +60,15 @@ async function loadExchangeMap(): Promise<Map<string, string>> {
   return exchangeMap;
 }
 
+/**
+ * The archive lists every report; the site root forwards to the newest one,
+ * so the default page is always the latest report.
+ */
+async function writeIndexPages(webDir: string, manifest: ReportManifestEntry[]): Promise<void> {
+  await fs.writeFile(path.join(webDir, "archive.html"), buildIndexPage(manifest), "utf-8");
+  await fs.writeFile(path.join(webDir, "index.html"), buildHomePage(manifest), "utf-8");
+}
+
 export const reportHtmlCommand = new Command("report:html")
   .description("Generate a weekly HTML report and optionally publish to AWS S3")
   .option("--no-fetch-trades", "Use cached trade data instead of fetching fresh")
@@ -71,7 +80,7 @@ export const reportHtmlCommand = new Command("report:html")
     DEFAULT_WEB_DIR
   )
   .option("--render-only", "Re-render HTML from the last saved analysis without re-fetching or re-analyzing")
-  .option("--rebuild-index", "Rebuild index.html from the manifest (prunes deleted reports) without generating a new report")
+  .option("--rebuild-index", "Rebuild archive.html and index.html from the manifest (prunes deleted reports) without generating a new report")
   .option("--skip-unchanged", "Skip generating and publishing if fetching found no new trades since the last run (for scheduled/automated runs)")
   .option("--top-window-days <days>", "Only rank trades from this many days back for Top Purchases / Committee-Relevant", "30")
   .option("--publish", "Sync output/web to S3 and invalidate CloudFront after generating")
@@ -93,9 +102,8 @@ export const reportHtmlCommand = new Command("report:html")
       if (options.rebuildIndex) {
         console.log("Rebuilding index from manifest...");
         const manifest = await rebuildManifest(webDir);
-        const indexHtml = buildIndexPage(manifest);
-        await fs.writeFile(path.join(webDir, "index.html"), indexHtml, "utf-8");
-        console.log(`✅ index.html rebuilt (${manifest.length} report${manifest.length !== 1 ? "s" : ""})`);
+        await writeIndexPages(webDir, manifest);
+        console.log(`✅ archive.html and index.html rebuilt (${manifest.length} report${manifest.length !== 1 ? "s" : ""})`);
         if (options.publish) {
           await publishOutput({ localDir: webDir, bucket: options.bucket, region: options.region, prefix: options.prefix });
         }
@@ -334,7 +342,7 @@ export const reportHtmlCommand = new Command("report:html")
           dateLabel: runDateLabel,
           memberSlug: key,
           reportUrl: reportFile,
-          indexUrl: "../index.html",
+          indexUrl: "../archive.html",
           exchangeMap,
           scoreLookup,
           dateStr,
@@ -371,7 +379,7 @@ export const reportHtmlCommand = new Command("report:html")
           trades: filtered,
           dateLabel: runDateLabel,
           reportUrl: reportFile,
-          indexUrl: "../index.html",
+          indexUrl: "../archive.html",
           exchangeMap,
           memberLink,
           scoreLookup,
@@ -402,7 +410,7 @@ export const reportHtmlCommand = new Command("report:html")
         salesTrades,
         purchaseTrades,
         dateLabel: runDateLabel,
-        indexUrl: "../index.html",
+        indexUrl: "../archive.html",
         exchangeMap,
         partyPageUrls,
         memberLink,
@@ -428,9 +436,8 @@ export const reportHtmlCommand = new Command("report:html")
         ...(runMaxFiling ? { maxFilingDate: runMaxFiling } : {}),
       });
 
-      const indexHtml = buildIndexPage(manifest);
-      await fs.writeFile(path.join(webDir, "index.html"), indexHtml, "utf-8");
-      console.log(`   Index → ${path.join(webDir, "index.html")} (${manifest.length} report${manifest.length !== 1 ? "s" : ""})`);
+      await writeIndexPages(webDir, manifest);
+      console.log(`   Archive → ${path.join(webDir, "archive.html")} (${manifest.length} report${manifest.length !== 1 ? "s" : ""}); index.html opens the latest`);
 
       // ── Publish to S3 ────────────────────────────────────────────────────
       if (options.publish) {

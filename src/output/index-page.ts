@@ -193,7 +193,7 @@ ${HTML_OPEN}
 </head>
 <body>
 
-${siteHeader("index.html", latest ? `<nav class="crumbs"><a href="${escHtml(latest.file)}">Latest report</a></nav>` : "")}
+${siteHeader("archive.html", latest ? `<nav class="crumbs"><a href="${escHtml(latest.file)}">Latest report</a></nav>` : "")}
 
 <main>
   <div class="page-head-band">
@@ -213,6 +213,33 @@ ${siteHeader("index.html", latest ? `<nav class="crumbs"><a href="${escHtml(late
 </footer>
 
 <script>${THEME_JS}</script>
+</body>
+</html>`;
+}
+
+/**
+ * The site root: forwards to the newest report. The meta refresh covers
+ * browsers without JavaScript; replace() keeps the hop out of history.
+ * With no reports yet it falls back to the (empty) archive.
+ */
+export function buildHomePage(entries: ReportManifestEntry[]): string {
+  const target = entries[0]?.file ?? "archive.html";
+  const href = escHtml(target);
+  return `<!DOCTYPE html>
+${HTML_OPEN}
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Congress trades</title>
+  <meta http-equiv="refresh" content="0; url=${href}">
+  <link rel="canonical" href="${href}">
+  <script>location.replace(${JSON.stringify(target).replace(/</g, "\\u003c")});</script>
+  ${themeHead()}
+</head>
+<body>
+  <main class="wrap page-head">
+    <p>Opening the <a href="${href}">latest report</a>. See <a href="archive.html">all reports</a>.</p>
+  </main>
 </body>
 </html>`;
 }
