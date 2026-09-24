@@ -1,0 +1,28 @@
+# Run from the repo root:  docker compose -f docker/compose.yaml run --rm congress-trades
+# Settings come from ../.env (optional). OLLAMA_URL / OLLAMA_API_KEY are taken from the
+# shell or docker/.env instead and override ../.env, which usually points at localhost for
+# native runs, which is unreachable from inside the container.
+services:
+  congress-trades:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: uniquetrades-congress
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      # LLM (Ollama) used to OCR scanned filings. Defaults to Ollama on the Docker host.
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      # Optional; sent as a bearer token when set
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+    extra_hosts:
+      # Makes host.docker.internal resolve on Linux too
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ../data:/app/data
+      - ../reports:/app/reports
+      - ../output:/app/output
+      - ../formatted-reports:/app/formatted-reports
+      - ../logs:/app/logs
+    command: ["report:html", "--publish", "--skip-unchanged"]

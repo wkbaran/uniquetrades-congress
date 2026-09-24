@@ -462,6 +462,8 @@ How a filing is processed:
 
 House and Senate scans are treated the same (`OCR_CHAMBERS=house,senate` by default). Accuracy differs by form: hand-checked House pages were transcribed with every field correct (71 of 71 rows), while a Senate paper page had 3 of 10 rows wrong (amount column and purchase/sale misread). Look for the OCR badge when a Senate paper filer's numbers seem off, and compare against the linked filing.
 
+The Ollama server is set with `OLLAMA_URL` (default `http://localhost:11434`). If it sits behind an authenticating proxy, set `OLLAMA_API_KEY` and it's sent as a bearer token; leave it unset for a plain local Ollama.
+
 Structured output is deliberately not used: constraining the model with Ollama's JSON-schema `format` made it misread the amount column on 10 of 25 rows of a test page.
 
 ### Daily run
@@ -484,6 +486,34 @@ After a catch-up, regenerate and publish to include the merged trades:
 
 ```bash
 node dist/index.js report:html --no-fetch-trades --publish
+```
+
+## Docker
+
+`docker/Dockerfile` builds the CLI into a Node 22 image, and `docker/compose.yaml` runs it the way `run-and-publish.ps1` does (`report:html --publish --skip-unchanged`). Run from the repo root:
+
+```bash
+docker compose -f docker/compose.yaml build
+docker compose -f docker/compose.yaml run --rm congress-trades                       # fetch, OCR, report, publish
+docker compose -f docker/compose.yaml run --rm congress-trades ocr:catchup --limit 5  # any other command
+```
+
+- **Settings** come from the repo's `.env` if it exists (not required).
+- **Data** persists across runs: `data/`, `reports/`, `output/`, `formatted-reports/`, and `logs/` are mounted from the repo, so the container and a native install share the same cache.
+- **LLM host**: `OLLAMA_URL` defaults to `http://host.docker.internal:11434`, the Ollama on the Docker host (this works on Linux too). `OLLAMA_API_KEY` is optional. Set both in your shell or in `docker/.env`, not the repo's `.env`: compose gives them priority because the repo's `.env` usually points at `localhost`, which from inside a container is the container itself.
+
+```bash
+OLLAMA_URL=https://ollama.example.com OLLAMA_API_KEY=secret \
+  docker compose -f docker/compose.yaml run --rm congress-trades
+```
+
+Without compose:
+
+```bash
+docker build -f docker/Dockerfile -t uniquetrades-congress .
+docker run --rm --env-file .env -e OLLAMA_URL=http://host.docker.internal:11434 \
+  -v "$PWD/data:/app/data" -v "$PWD/reports:/app/reports" -v "$PWD/output:/app/output" -v "$PWD/logs:/app/logs" \
+  uniquetrades-congress report:html --skip-unchanged
 ```
 
 ## Disclaimer

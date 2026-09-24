@@ -1,0 +1,12 @@
+node_modules
+dist
+data
+reports
+output
+report-output
+formatted-reports
+logs
+test-results
+.env*
+.git
+.claude

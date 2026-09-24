@@ -13,6 +13,8 @@ export interface OcrOptions {
   url: string;
   model: string;
   timeoutMs: number;
+  /** Bearer token for an Ollama behind an authenticating proxy; unset for a plain local Ollama */
+  apiKey?: string;
 }
 
 export function ocrOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): OcrOptions {
@@ -20,7 +22,12 @@ export function ocrOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): OcrOpti
     url: (env.OLLAMA_URL ?? "http://localhost:11434").replace(/\/+$/, ""),
     model: env.OCR_MODEL ?? "qwen3.6:27b",
     timeoutMs: Number(env.OCR_TIMEOUT_MS ?? 10 * 60 * 1000),
+    apiKey: env.OLLAMA_API_KEY || undefined,
   };
+}
+
+function authHeaders(opts: OcrOptions): Record<string, string> {
+  return opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
 }
 
 /** A row as the model returns it */
@@ -277,7 +284,7 @@ export interface PageOcr {
  * no headers until it starts on a request, and a request queued behind another model on a
  * shared GPU can wait longer than that. Only the overall timeout applies here.
  */
-function ollamaChat(url: string, body: unknown, timeoutMs: number): Promise<{ status: number; content: string; errorText: string }> {
+function ollamaChat(url: string, body: unknown, timeoutMs: number, headers: Record<string, string>): Promise<{ status: number; content: string; errorText: string }> {
   return new Promise((resolve, reject) => {
     const target = new URL(url);
     const payload = Buffer.from(JSON.stringify(body));
@@ -292,7 +299,7 @@ function ollamaChat(url: string, body: unknown, timeoutMs: number): Promise<{ st
 
     const req = client.request(
       target,
-      { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": payload.length } },
+      { method: "POST", headers: { ...headers, "Content-Type": "application/json", "Content-Length": payload.length } },
       (res) => {
         const status = res.statusCode ?? 0;
         let buffered = "";
@@ -354,7 +361,8 @@ export async function ocrPage(png: Buffer, form: FormKind, opts: OcrOptions): Pr
         options: { temperature: 0, num_ctx: 16384 },
         messages: [{ role: "user", content: PROMPTS[form], images: [png.toString("base64")] }],
       },
-      opts.timeoutMs
+      opts.timeoutMs,
+      authHeaders(opts)
     );
     if (status !== 200) {
       return { readable: false, rows: [], raw: "", seconds: seconds(), error: `Ollama HTTP ${status}: ${errorText.slice(0, 200)}` };
@@ -370,7 +378,7 @@ export async function ocrPage(png: Buffer, form: FormKind, opts: OcrOptions): Pr
 /** Null when Ollama is reachable and the model is installed; otherwise the reason it isn't usable. */
 export async function checkOllama(opts: OcrOptions): Promise<string | null> {
   try {
-    const resp = await fetch(`${opts.url}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    const resp = await fetch(`${opts.url}/api/tags`, { headers: authHeaders(opts), signal: AbortSignal.timeout(5000) });
     if (!resp.ok) return `Ollama returned HTTP ${resp.status}`;
     const { models = [] } = (await resp.json()) as { models?: Array<{ name: string }> };
     const wanted = opts.model.includes(":") ? opts.model : `${opts.model}:latest`;
