@@ -1,521 +1,76 @@
-# Congress Trades CLI
+<div align="center">
 
-A command-line tool for tracking and analyzing congressional stock trades to identify unique investment opportunities.
+# Congress Trades
 
-## Overview
+**Which stock trades by members of Congress are actually unusual?**
 
-This tool fetches congressional trading data from [Financial Modeling Prep (FMP)](https://financialmodelingprep.com/) and scores each trade based on multiple factors to help identify potentially interesting or unusual trades. The goal is to surface trades that might be worth investigating further, not to provide investment advice.
+Pulls every stock trade members disclose straight from the House and Senate, scores each one for how far it sits from normal congressional trading, and publishes a daily briefing of what's new.
 
-## Installation
+![Node 22](https://img.shields.io/badge/node-22-339933?logo=nodedotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Public data only](https://img.shields.io/badge/data-public%20domain-6f42c1)
+![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)
+
+[How it works](#how-it-works) · [Quick start](#quick-start) · [Scoring](docs/SCORING.md) · [CLI](docs/CLI.md) · [OCR](docs/OCR.md) · [Publishing](docs/PUBLISHING.md)
+
+<img src="docs/images/report.png" alt="The daily report: trades disclosed since the last report grouped by member, then the most unusual purchases ranked by score, one expanded to show why it scored as it did" width="900">
+
+</div>
+
+## How it works
+
+Members of Congress must report stock trades within 45 days (the STOCK Act). This tool collects those reports, adds company and committee context, and ranks each purchase on a 0–100 scale. A trade scores higher when it is a stock Congress rarely touches, it is much bigger than the member's usual trade, the member sits on a committee that oversees the company's industry, it is a small company, an option, or it went through a spouse's or child's account. [Scoring](docs/SCORING.md) has the full formula.
+
+Each run produces a static site: a report that opens with what was disclosed since the previous run, the most unusual purchases of the last 30 days with the reasons written out, every trade on file, and a page per member and per party.
+
+### Where the data comes from
+
+Everything is public and free. There are no paid APIs.
+
+| What | Source | How |
+|---|---|---|
+| House trades | [House Clerk](https://disclosures-clerk.house.gov/) | Downloads the yearly filing index, then each periodic transaction report (PTR) PDF, which it decrypts and parses directly |
+| Senate trades | [Senate eFD](https://efdsearch.senate.gov/) | Reads each electronic PTR page |
+| Scanned paper filings | Same two sites | Renders pages with [MuPDF](https://mupdf.com/) and reads them with a local vision model on [Ollama](https://ollama.com) (`qwen3.6:27b` by default). Optional. See [OCR](docs/OCR.md) |
+| Company size and industry | [SEC EDGAR](https://www.sec.gov/edgar) | Ticker to company lookup, SIC code mapped to a sector, public float as the market cap |
+| Members, parties, committees | [unitedstates/congress-legislators](https://github.com/unitedstates/congress-legislators) | Current legislators and committee membership |
+| Which committee oversees what | This repo | A hand-built map from each committee to the sectors and industries it oversees (`src/data/committee-sector-taxonomy.ts`) |
+| Charts | [TradingView](https://www.tradingview.com/) | Links only |
+
+[Financial Modeling Prep](https://financialmodelingprep.com/) can stand in for the government and EDGAR sources with `DATA_SOURCE=fmp` and an API key.
+
+Hosting is optional. The site is plain HTML files. The repo includes a CloudFormation template for S3 and CloudFront, and a Windows task and Docker setup for daily runs. See [Publishing](docs/PUBLISHING.md).
+
+## Quick start
+
+You need Node.js 22.
 
 ```bash
 npm install
 npm run build
+echo 'SEC_USER_AGENT="Your Name you@example.com"' > .env   # the SEC requires a contact in the User-Agent
+node --env-file=.env dist/index.js report:html
 ```
 
-## Configuration
+The first run downloads a year of filings, so it takes a while. Later runs only fetch what's new. Open `output/web/index.html`, which forwards to the newest report.
 
-Create a `.env` file with your FMP API key:
+Add `--publish` to upload the site to S3, or skip OCR with `--no-ocr` if you don't run Ollama. For the terminal instead of a web page, `node dist/index.js analyze` prints the top-scoring trades. [CLI](docs/CLI.md) lists every command.
 
-```
-FMP_API_KEY=your_api_key_here
-```
+## The report
 
-### Global CLI Installation (Optional)
+- **New since the last report.** Filings arrive weeks after the trade, so they would otherwise sit mid-table. They're grouped by member at the top and marked in the tables.
+- **Most unusual purchases.** Ranked by score, each with its reasons ("11.5× their usual trade size. Spouse's account.") and details such as company size and the member's committees. Switch to trades that overlap the member's committees, hide assets with no ticker, or download a CSV.
+- **Every trade**, with pages per member and per party, and an archive of past reports.
+- A palette picker and light and dark modes.
 
-To use the CLI without `npm start --`, install it globally:
+## Docs
 
-```bash
-npm link
-```
-
-Then you can run commands directly:
-```bash
-congress-trades analyze --since 2026-01-01
-congress-trades fetch:trades
-congress-trades report:sales
-```
-
-## Commands
-
-### Analyze Trades
-
-The main command that fetches fresh trade data and scores purchases for uniqueness:
-
-```bash
-npm start -- analyze
-```
-
-**Analyze recent trades only:**
-```bash
-npm start -- analyze --since 2026-01-01
-```
-
-This analyzes the full dataset for accurate scoring but only displays trades from the specified date onwards.
-
-**Options:**
-- `--min-score <number>` - Minimum uniqueness score to show (default: 40)
-- `--top <number>` - Limit to top N results, 0 = all (default: 0)
-- `--type <type>` - Filter by trade type: `purchase` (default), `sale`, or `all`
-- `--since <date>` - Only show trades from this date onwards (YYYY-MM-DD). Note: Full dataset is still analyzed for accurate rarity scoring
-- `--new-only` - Only show trades not seen in a previous report. Seen trade keys are persisted in `data/seen-trades.json` and accumulated across runs. Delete that file to reset. Note: Full dataset is still scored for accurate rarity scoring
-- `--no-fetch-trades` - Skip fetching fresh data, use cached
-- `-r, --refresh` - Force full refresh instead of incremental update (only when fetching)
-- `--no-market-data` - Skip fetching market data (faster, but no market cap scoring)
-- `--market-data-ttl <days>` - Market data cache TTL in days (default: 30)
-- `--json` - Output raw JSON instead of formatted text
-
-### Fetch Trades
-
-Fetch congressional trades with **incremental updates** (fetches only new trades by default):
-
-```bash
-npm start -- fetch:trades
-```
-
-**Incremental Mode (default):**
-- Loads existing trade data
-- Fetches only trades newer than the most recent trade in the database
-- Merges new trades with existing data, avoiding duplicates
-- Perfect for daily/weekly updates
-
-**Refresh Mode:**
-```bash
-npm start -- fetch:trades --refresh
-```
-- Clears existing data and fetches all trades from the target date
-- Use this for the initial fetch or when you want to rebuild the database
-
-**Options:**
-- `-r, --refresh` - Force full refresh from target date instead of incremental update
-- `--since <date>` - Target date for refresh mode (YYYY-MM-DD). Default: 1 year ago
-- `--limit <number>` - Trades per page (default: 100)
-
-### Sales Report
-
-Generate a simple formatted report of all sales (useful for checking against your holdings):
-
-```bash
-npm start -- report:sales
-```
-
-### Fetch Committee Data
-
-Fetch committee membership data for committee relevance scoring:
-
-```bash
-npm start -- fetch:committees
-```
-
-## Data Sources
-
-### Congressional Trade Data
-**Source:** FMP REST API
-**Endpoints:**
-- `GET /stable/senate-latest?page={n}&limit={n}` - Senate trades
-- `GET /stable/house-latest?page={n}&limit={n}` - House trades
-
-**Fetching Behavior:**
-- **Incremental mode (default):** Fetches only trades newer than the most recent trade in the local database, then merges with existing data
-- **Refresh mode (`--refresh`):** Fetches all trades going back to the target date (default: 1 year ago), replacing existing data
-- Duplicate detection uses: `firstName`, `lastName`, `transactionDate`, `symbol`, `type`, `amount`, `owner`
-
-**Fields used:** `symbol`, `firstName`, `lastName`, `transactionDate`, `type`, `amount`, `owner`, `assetType`, `assetDescription`
-
-**Storage:** Trade data is stored locally in `data/trades.json` with a timestamp, enabling fast incremental updates
-
-## Caching Strategy
-
-All data is cached locally in the `data/` directory to minimize API calls and speed up analysis:
-
-| Data Type | Cache File | TTL | Behavior |
-|-----------|-----------|-----|----------|
-| **Trade Data** | `trades.json` | ∞ | Incremental: Fetches only new trades since last update |
-| **Seen Trades** | `seen-trades.json` | ∞ | Set of trade keys shown in `--new-only` reports; delete to reset |
-| **Market Data** | `market-data-cache.json` | 30 days (configurable) | Per-symbol caching with expiration |
-| **Committee Data** | `committee-data.json` | 24 hours | Full refresh when expired |
-| **Legislators** | `legislators.json` | 24 hours | Full refresh when expired |
-| **Sectors/Industries** | `fmp-sectors.json`, `fmp-industries.json` | 7 days | Taxonomy data, rarely changes |
-
-**Recommended weekly workflow:**
-```bash
-# Run once a week — fetches new disclosures, shows only trades not seen before
-congress-trades analyze --new-only
-```
-
-To start fresh (show all trades again on the next run):
-```bash
-rm data/seen-trades.json
-```
-
-**Customizing Market Data Cache:**
-```bash
-npm start -- analyze --market-data-ttl 7   # 7-day cache
-npm start -- analyze --market-data-ttl 90  # 90-day cache
-```
-
-### Market Data (for scoring)
-**Source:** FMP REST API
-**Endpoint:** `GET /stable/profile?symbol={symbol}`
-
-Fetched during analysis for each unique symbol in the trade data. Provides:
-- `marketCap` - Company market capitalization in dollars
-- `sector` - FMP sector classification (e.g., "Technology", "Healthcare")
-- `industry` - FMP industry classification (e.g., "Software - Application", "Banks - Diversified")
-- `averageVolume` - Average trading volume
-
-**Caching:** Market data is cached for 30 days by default (configurable with `--market-data-ttl`). Since scoring uses thresholds (micro/small/mid/large cap), not exact values, a 30-day cache is reasonable as companies rarely change categories within that timeframe.
-
-### Committee Membership Data
-**Source:** GitHub raw files from [unitedstates/congress-legislators](https://github.com/unitedstates/congress-legislators)
-
-**Files fetched:**
-- `legislators-current.yaml` - Current congress member info (name, party, terms)
-- `committee-membership-current.yaml` - Which members sit on which committees
-- `committees-current.yaml` - Committee metadata (names, IDs)
-
-This data is used to:
-1. Look up a trader's committee assignments by matching their name
-2. Determine their party affiliation (R/D)
-
-### Committee-to-Sector Mapping
-**Source:** Local taxonomy file (`src/data/committee-sector-taxonomy.ts`)
-
-A manually curated mapping from congressional committees to FMP sectors/industries. For example:
-- `SSBK` (Senate Banking) → Financial Services sector, Banks/Insurance industries
-- `HSAG` (House Agriculture) → Consumer Defensive sector, Agricultural Inputs industry
-- `SSAS` (Senate Armed Services) → Industrials sector, Aerospace & Defense industry
-
-## Uniqueness Scoring
-
-Each trade is scored on a 0-100 scale based on six weighted factors. Higher scores indicate more "unique" or potentially interesting trades.
-
-### Scoring Factors
-
-| Factor | Weight | Description |
-|--------|--------|-------------|
-| Market Cap | 20% | Smaller companies are less followed by analysts |
-| Conviction | 25% | Larger trades relative to trader's typical size |
-| Rarity | 25% | Stocks rarely traded by congress members |
-| Committee Relevance | 15% | Trading in sectors the member's committee oversees |
-| Derivative | 10% | Options/warrants indicate timing sensitivity |
-| Ownership | 5% | Indirect ownership (spouse/child) may indicate distancing |
-
-### Factor Calculations
-
-#### Market Cap Score (0-100)
-
-**Data source:** FMP `/stable/profile` endpoint → `marketCap` field
-
-**Calculation:**
-1. Fetch the stock's profile from FMP
-2. Read the `marketCap` value (in dollars)
-3. Score based on thresholds:
-   - **Micro cap** (< $300M): 100 points
-   - **Small cap** (< $2B): 75 points
-   - **Mid cap** (< $10B): 25 points
-   - **Large cap** (≥ $10B): 0 points
-   - **No data available**: 0 points
-
-*Rationale: Smaller companies receive less analyst coverage, so congressional trades may represent unique information.*
-
-#### Conviction Score (0-100)
-
-**Data source:** Trade `amount` field from FMP trade endpoints, compared against trader's historical average
-
-**Calculation:**
-1. Parse the trade's amount range (e.g., "$15,001 - $50,000" → midpoint $32,500)
-2. Calculate the trader's average trade size from all their trades in the dataset
-3. Compute multiplier: `tradeSize / averageTradeSize`
-4. Score based on multiplier:
-   - **5x+ average**: 100 points (very high conviction)
-   - **2x-5x average**: 75 points (high conviction)
-   - **1.5x-2x average**: 50 points
-   - **1x-1.5x average**: 25 points
-   - **Below average**: 0 points
-
-*Rationale: Unusually large trades may indicate stronger conviction about the position.*
-
-#### Rarity Score (0-100)
-
-**Data source:** Aggregated from all trades in the fetched dataset
-
-**Calculation:**
-1. Count total congressional trades for this symbol across the entire dataset
-2. Count unique traders (congress members) who have traded this symbol
-3. Score based on total trades:
-   - **Unique** (≤1 trade): 100 points
-   - **Rare** (≤3 trades): 75 points
-   - **Uncommon** (≤10 trades): 50 points
-   - **Common** (>10 trades): 0 points
-4. Add bonus for concentrated interest:
-   - Only 1 unique trader: +25 points
-   - ≤3 unique traders: +10 points
-5. Cap at 100 points
-
-*Rationale: Stocks that congress members rarely trade may represent unique situations.*
-
-#### Committee Relevance Score (0-100)
-
-**Data sources:**
-- Trader's committees: GitHub `committee-membership-current.yaml`
-- Stock's sector/industry: FMP `/stable/profile` endpoint
-- Committee-to-sector mapping: Local taxonomy file
-
-**Calculation:**
-1. Look up the trader's committee assignments from GitHub data
-2. Fetch the stock's sector and industry from FMP
-3. For each of the trader's committees, check if it has jurisdiction over the stock's sector or industry using the local taxonomy
-4. Score based on overlaps:
-   - **Multiple committee overlaps**: 100 points
-   - **Single committee overlap**: 75 points
-   - **No overlap**: 0 points
-
-*Rationale: Members may have industry-specific knowledge from their committee work.*
-
-**Example:** If Senator X sits on the Banking Committee (SSBK) and trades JPMorgan (sector: "Financial Services", industry: "Banks - Diversified"), this scores 75 points because SSBK has jurisdiction over financial services.
-
-#### Derivative Score (0-100)
-
-**Data source:** Trade `assetType` field from FMP trade endpoints
-
-**Calculation:**
-1. Read the `assetType` field from the trade
-2. Check for derivative keywords:
-   - Contains "option", "warrant", or "right": 100 points
-   - Contains "future" or "derivative": 75 points
-   - Regular stock or other: 0 points
-
-*Rationale: Derivatives have expiration dates, suggesting timing-sensitive information.*
-
-#### Ownership Score (0-100)
-
-**Data source:** Trade `owner` field from FMP trade endpoints
-
-**Calculation:**
-1. Read the `owner` field from the trade
-2. Score based on ownership type:
-   - **Child/Dependent**: 100 points
-   - **Spouse**: 75 points
-   - **Joint**: 25 points
-   - **Self**: 0 points
-
-*Rationale: Indirect ownership may indicate an attempt to distance from the trade.*
-
-### Overall Score Calculation
-
-The overall score is a weighted average of all factor scores:
-
-```
-Overall = (MarketCap × 0.20) + (Conviction × 0.25) + (Rarity × 0.25) +
-          (CommitteeRelevance × 0.15) + (Derivative × 0.10) + (Ownership × 0.05)
-```
-
-## Output
-
-Reports are saved to the `formatted-reports/` directory with timestamps.
-
-### Sample Output
-
-**Trade without committee relevance:**
-```
-📊 FMAO - Farmers & Merchants Bancorp Inc
-   Trader: Robert E. Latta (R) (house)
-   Type: Purchase | Amount: $1,001 - $15,000
-   Date: 2026-01-20
-   Score: 50/100
-   Factors:
-     - Market Cap: $352M (small)
-     - Rarity: unique (1 total congress trades)
-     - Indirect Ownership: Spouse
-```
-
-**Trade with committee relevance (potential oversight concern):**
-```
-📊 PG - The Procter & Gamble Co
-   Trader: David Taylor (R) (house)
-   Type: Purchase | Amount: $1,001 - $15,000
-   Date: 2026-01-09
-   Score: 36/100
-   Factors:
-     - Market Cap: $345B (large)
-     - Rarity: unique (1 total congress trades)
-     ⚠️  Committee Relevance: House Committee on Agriculture
-        Sector: Consumer Defensive | Industry: Household & Personal Products
-```
-
-The report includes:
-- **Trader info**: Name, party (R/D), chamber
-- **Trade details**: Type, amount range, transaction date
-- **Scoring**: Overall score (0-100) and breakdown by factor
-- **Committee relevance**: Only shown when a member's committee has jurisdiction over the stock's sector/industry, displaying:
-  - Which committee(s) have oversight
-  - The stock's sector and industry classification
-
-## AWS Deployment
-
-The project includes a CloudFormation template (`cloudformation.yaml`) that provisions an S3 bucket, CloudFront distribution, ACM certificate (optional), Route 53 DNS record (optional), and an IAM publish user.
-
-**Must be deployed to `us-east-1`** (ACM certificates used by CloudFront must live there).
-
-### Deploy the stack
-
-```cmd
-aws cloudformation deploy ^
-  --region us-east-1 ^
-  --stack-name congress-trades ^
-  --template-file cloudformation.yaml ^
-  --capabilities CAPABILITY_NAMED_IAM ^
-  --parameter-overrides BucketName=<your-globally-unique-bucket-name>
-```
-
-With a custom domain:
-
-```cmd
-aws cloudformation deploy ^
-  --region us-east-1 ^
-  --stack-name congress-trades ^
-  --template-file cloudformation.yaml ^
-  --capabilities CAPABILITY_NAMED_IAM ^
-  --parameter-overrides ^
-      BucketName=<your-globally-unique-bucket-name> ^
-      CustomDomain=trades.example.com ^
-      HostedZoneId=<your-route53-hosted-zone-id>
-```
-
-### Populate .env from stack outputs
-
-Run `setup-env.sh` after deploying to populate `.env` with the stack outputs:
-
-```bash
-bash setup-env.sh
-```
-
-This fetches `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `CLOUDFRONT_DISTRIBUTION_ID` from the stack and writes them to `.env`, preserving your existing `FMP_API_KEY`.
-
-> **Note:** `AWS_SECRET_ACCESS_KEY` is only returned by CloudFormation on the first deploy. Store it securely — if lost, rotate the key in IAM or redeploy the stack.
-
-### Publish manually
-
-```bash
-node dist/index.js report:html --publish
-```
-
-This fetches fresh trade data, re-runs the analysis, regenerates all HTML (report, member pages, party pages, index), syncs to S3, and invalidates CloudFront.
-
-Add `--skip-unchanged` to skip the regenerate/publish step entirely when the fetch didn't find any new trades since last time — useful for scheduled runs where you don't want to rebuild and re-sync the whole site every time the source happens to have nothing new.
-
-## Automated Publishing (Windows)
-
-`run-and-publish.ps1` runs the full pipeline and logs output to `logs\congress-trades-YYYY-MM-DD.log`. It calls `report:html --publish --skip-unchanged`, so the House Clerk/Senate eFD are fetched every run, but the report is only regenerated and republished when that fetch actually turns up new trades.
-
-The House Clerk and Senate eFD offices are federal government offices — new PTR filings only get published to their sites on business days — so the task is scheduled Monday–Friday rather than daily. Running it more often than that just re-checks a source that hasn't changed, which `--skip-unchanged` now makes cheap (no wasted HTML rebuild or S3 sync), but there's still no reason to fetch on a weekend.
-
-### Create the scheduled task
-
-Run the following in PowerShell as Administrator (adjust the time as needed):
-
-```powershell
-$action = New-ScheduledTaskAction `
-  -Execute "powershell.exe" `
-  -Argument '-NonInteractive -ExecutionPolicy Bypass -File "C:\Users\billb\projects\uniquetrades-congress\run-and-publish.ps1"' `
-  -WorkingDirectory "C:\Users\billb\projects\uniquetrades-congress"
-
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "7:00AM"
-
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
-
-Register-ScheduledTask `
-  -TaskName "Congress Trades - Daily Report" `
-  -Action $action `
-  -Trigger $trigger `
-  -Settings $settings `
-  -RunLevel Highest
-```
-
-`-StartWhenAvailable` ensures the task runs as soon as possible if the computer was off at the scheduled time.
-
-### Update an existing task
-
-If you already have the old weekly "Congress Trades - Weekly Report" task registered, point it at the new Mon–Fri trigger (or delete it and register the task above under the new name):
-
-```powershell
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "7:00AM"
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
-
-Set-ScheduledTask `
-  -TaskName "Congress Trades - Weekly Report" `
-  -Trigger $trigger `
-  -Settings $settings
-```
-
-## Scanned Filings (OCR)
-
-Some members file PTRs on paper: the House publishes them as image-only PDFs, and the Senate as "paper filings" made of scanned GIF pages. Neither has machine-readable text, so each fetch records them in `data/unparseable-filings.json`, and an OCR step transcribes them with a local [Ollama](https://ollama.com) vision model (default `qwen3.6:27b`, which read test pages with every field correct).
-
-How a filing is processed:
-
-1. Each page is rendered to PNG with MuPDF. Pages scanned sideways (portrait for the landscape House form, or the reverse for the Senate form) are rotated first, because the model reads a sideways page into confident but wrong rows.
-2. The model returns rows as JSON. A row becomes a trade only if its transaction date, amount range, and purchase/sale type all normalize to known values; account header rows are skipped.
-3. Every validated row is used. A page where fewer than 80% of rows validate is flagged for review in the log, but its readable rows still go into the data: an imperfect row is easier to notice in the report than a trade that's missing.
-4. Validated rows are stored with `source: "ocr"` and shown with an **OCR** badge in the report. A cleanly OCR'd filing replaces any rows stored for it; a filing with pages needing review only adds rows when nothing is stored for it yet.
-
-House and Senate scans are treated the same (`OCR_CHAMBERS=house,senate` by default). Accuracy differs by form: hand-checked House pages were transcribed with every field correct (71 of 71 rows), while a Senate paper page had 3 of 10 rows wrong (amount column and purchase/sale misread). Look for the OCR badge when a Senate paper filer's numbers seem off, and compare against the linked filing.
-
-The Ollama server is set with `OLLAMA_URL` (default `http://localhost:11434`). If it sits behind an authenticating proxy, set `OLLAMA_API_KEY` and it's sent as a bearer token; leave it unset for a plain local Ollama.
-
-Structured output is deliberately not used: constraining the model with Ollama's JSON-schema `format` made it misread the amount column on 10 of 25 rows of a test page.
-
-### Daily run
-
-`report:html` runs OCR after fetching, for scanned filings not yet attempted, up to `OCR_DAILY_MAX_PAGES` pages (default 60). Larger filings are deferred to the catch-up command. Pass `--no-ocr` to skip it.
-
-### Catch-up and review
-
-```powershell
-.\ocr-catchup.ps1 --list                 # what would be processed
-.\ocr-catchup.ps1                        # everything not yet OCR'd (long-running: ~100s per page)
-.\ocr-catchup.ps1 --limit 5              # a few filings at a time
-.\ocr-catchup.ps1 --filing 9115726       # one filing
-.\ocr-catchup.ps1 --retry                # re-run filings that failed or have pages needing review
-```
-
-Each run writes `logs\ocr-catchup-<timestamp>.log`: one line per page (status, rotation, valid/rejected rows, time) plus every rejected row and why, and a closing summary listing pages to review. For every page, `logs\ocr\<chamber>-<id>\page-N.json` holds the raw model output and validation; pages needing review also get `page-N.png`. Per-filing outcomes are kept in `data/ocr-results.json`.
-
-After a catch-up, regenerate and publish to include the merged trades:
-
-```bash
-node dist/index.js report:html --no-fetch-trades --publish
-```
-
-## Docker
-
-`docker/Dockerfile` builds the CLI into a Node 22 image, and `docker/compose.yaml` runs it the way `run-and-publish.ps1` does (`report:html --publish --skip-unchanged`). Run from the repo root:
-
-```bash
-docker compose -f docker/compose.yaml build
-docker compose -f docker/compose.yaml run --rm congress-trades                       # fetch, OCR, report, publish
-docker compose -f docker/compose.yaml run --rm congress-trades ocr:catchup --limit 5  # any other command
-```
-
-- **Settings** come from the repo's `.env` if it exists (not required).
-- **Data** persists across runs: `data/`, `reports/`, `output/`, `formatted-reports/`, and `logs/` are mounted from the repo, so the container and a native install share the same cache.
-- **LLM host**: `OLLAMA_URL` defaults to `http://host.docker.internal:11434`, the Ollama on the Docker host (this works on Linux too). `OLLAMA_API_KEY` is optional. Set both in your shell or in `docker/.env`, not the repo's `.env`: compose gives them priority because the repo's `.env` usually points at `localhost`, which from inside a container is the container itself.
-
-```bash
-OLLAMA_URL=https://ollama.example.com OLLAMA_API_KEY=secret \
-  docker compose -f docker/compose.yaml run --rm congress-trades
-```
-
-Without compose:
-
-```bash
-docker build -f docker/Dockerfile -t uniquetrades-congress .
-docker run --rm --env-file .env -e OLLAMA_URL=http://host.docker.internal:11434 \
-  -v "$PWD/data:/app/data" -v "$PWD/reports:/app/reports" -v "$PWD/output:/app/output" -v "$PWD/logs:/app/logs" \
-  uniquetrades-congress report:html --skip-unchanged
-```
+- [Scoring](docs/SCORING.md): the six factors, their weights and thresholds
+- [CLI](docs/CLI.md): every command, options, and what's cached where
+- [OCR](docs/OCR.md): reading scanned paper filings, accuracy, and the catch-up command
+- [Publishing](docs/PUBLISHING.md): AWS hosting, scheduled runs, and Docker
+- [Sector and industry mapping](docs/sector-industry-mapping.md): how committees map to industries
 
 ## Disclaimer
 
-This tool is for informational and educational purposes only. It does not constitute investment advice. Congressional trading data is publicly available but may be delayed. Always do your own research before making investment decisions.
+For information and research only. Scores measure how unusual a trade is, not whether it's a good investment, and nothing here is investment advice. Disclosures lag trades by up to 45 days, and rows read from scanned filings can contain errors, so check the linked filing before relying on a number.
