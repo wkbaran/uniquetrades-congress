@@ -1,5 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import { HTML_OPEN, THEME_JS, themeHead, siteHeader } from "./theme.js";
 
 /** A chip on the archive page: one newly disclosed trade's symbol and side. */
 export interface ManifestSymbol {
@@ -118,99 +119,28 @@ export async function rebuildManifest(webDir: string): Promise<ReportManifestEnt
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Index page CSS (self-contained)
+// Index page
 // ─────────────────────────────────────────────────────────────────────────────
 
 const INDEX_CSS = `
-  :root {
-    --bg: #1e1e2e; --surface: #313244; --surface2: #45475a;
-    --border: #585b70; --text: #cdd6f4; --subtext: #a6adc8;
-    --muted: #6c7086; --accent: #89b4fa; --radius: 10px;
-    --sale: #f38ba8; --new: #f9e2af;
+  .report-list { list-style: none; padding: 0; border-top: 1px solid var(--line); }
+  .report-item { display: grid; grid-template-columns: 12rem 1fr auto; gap: 0.3rem 1.5rem; align-items: baseline; padding: 0.9rem 0; border-bottom: 1px solid var(--line); }
+  .report-date a { font-weight: 600; text-decoration: none; }
+  .report-date a:hover { text-decoration: underline; text-decoration-color: var(--signal); }
+  .report-count { color: var(--sub); font-size: 0.92rem; }
+  .report-new { color: var(--ink); font-weight: 600; }
+  .report-new::before { content: ""; display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--signal); margin-right: 0.4rem; vertical-align: 1px; }
+  .report-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; justify-content: end; }
+  .chip { font-size: 0.8rem; font-weight: 600; padding: 0 0.35rem; border: 1px solid var(--line-strong); border-radius: 4px; }
+  /* Sales are muted so a run's disclosures can be skimmed by side at a glance. */
+  .chip-sale { font-weight: 400; color: var(--muted); border-color: var(--line); }
+  .legend { margin-top: 0.75rem; font-size: 0.85rem; color: var(--muted); }
+  .legend .chip { font-size: 0.75rem; }
+  .empty-msg { color: var(--sub); padding: 1rem 0; }
+  @media (max-width: 640px) {
+    .report-item { grid-template-columns: 1fr auto; }
+    .report-chips { grid-column: 1 / 3; justify-content: start; }
   }
-  [data-theme="light"] {
-    --bg: #eff1f5; --surface: #e6e9ef; --surface2: #dce0e8;
-    --border: #bcc0cc; --text: #4c4f69; --subtext: #5c5f77;
-    --muted: #9ca0b0; --accent: #1e66f5;
-    --sale: #d20f39; --new: #7d5400;
-  }
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: var(--bg); color: var(--text);
-    font-family: 'Inter', system-ui, sans-serif;
-    line-height: 1.5; min-height: 100vh;
-  }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .site-header {
-    background: var(--surface); border-bottom: 1px solid var(--border);
-    padding: 1rem 1.5rem; display: flex; align-items: center;
-    justify-content: space-between; gap: 1rem;
-  }
-  .site-title { font-size: 1.1rem; font-weight: 700; color: var(--accent); }
-  .site-subtitle { font-size: 0.8rem; color: var(--subtext); margin-top: 0.15rem; }
-  .theme-btn {
-    background: var(--surface2); border: 1px solid var(--border);
-    color: var(--text); padding: 0.35rem 0.75rem; border-radius: 6px;
-    cursor: pointer; font-size: 0.8rem;
-  }
-  main { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
-  h1 { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; color: var(--text); }
-  .report-list { display: flex; flex-direction: column; gap: 0.75rem; }
-  .report-item {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 1rem 1.25rem;
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 1rem; transition: background 0.1s;
-  }
-  .report-item:hover { background: var(--surface2); }
-  .report-meta { flex: 1; min-width: 0; }
-  .report-date { font-size: 0.88rem; font-weight: 600; }
-  .report-count { font-size: 0.78rem; color: var(--subtext); margin-top: 0.15rem; }
-  .report-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
-  .chip {
-    font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.5rem;
-    border-radius: 4px; background: rgba(137,180,250,0.12);
-    color: var(--accent); border: 1px solid rgba(137,180,250,0.25);
-  }
-  /* Sales read red so a run's disclosures can be skimmed by side at a glance. */
-  .chip-sale {
-    background: rgba(243,139,168,0.12);
-    color: var(--sale); border-color: rgba(243,139,168,0.3);
-  }
-  .report-new { color: var(--new); font-weight: 600; }
-  .report-link { white-space: nowrap; font-size: 0.83rem; align-self: center; }
-  footer {
-    text-align: center; font-size: 0.75rem; color: var(--muted);
-    padding: 2rem 1rem; border-top: 1px solid var(--border); margin-top: 2rem;
-  }
-  @media (max-width: 600px) {
-    .report-item { flex-direction: column; }
-    .report-link { align-self: flex-start; }
-  }
-`;
-
-const INDEX_JS = `
-(function () {
-  const root = document.documentElement;
-  const btn = document.getElementById('theme-btn');
-  const saved = localStorage.getItem('congress-theme');
-  if (saved === 'light') root.setAttribute('data-theme', 'light');
-  function updateLabel() {
-    const current = root.getAttribute('data-theme');
-    if (btn) btn.textContent = current === 'light' ? '\u{1F319} Dark' : '\u2600\uFE0F Light';
-  }
-  updateLabel();
-  if (btn) {
-    btn.addEventListener('click', function () {
-      const current = root.getAttribute('data-theme');
-      const next = current === 'light' ? 'dark' : 'light';
-      root.setAttribute('data-theme', next);
-      localStorage.setItem('congress-theme', next);
-      updateLabel();
-    });
-  }
-})();
 `;
 
 function escHtml(s: string): string {
@@ -220,10 +150,6 @@ function escHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Index page builder
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function buildIndexPage(entries: ReportManifestEntry[]): string {
   const rows = entries.map((e) => {
@@ -237,53 +163,48 @@ export function buildIndexPage(entries: ReportManifestEntry[]): string {
       .slice(0, 6)
       .map((c) => {
         const cls = colorize && c.side === "sale" ? "chip chip-sale" : "chip";
-        const title = colorize ? ` title="${c.side === "sale" ? "Sale" : "Purchase"}"` : "";
+        const title = colorize ? ` title="${c.side === "sale" ? "Sold" : "Bought"}"` : "";
         return `<span class="${cls}"${title}>${escHtml(c.symbol)}</span>`;
       })
       .join("");
 
-    const newCount =
-      e.newTrades && e.newTrades > 0
-        ? ` &middot; <span class="report-new">${e.newTrades} newly disclosed</span>`
-        : "";
+    const count = e.newTrades && e.newTrades > 0
+      ? `<span class="report-new">${e.newTrades} new</span>, ${e.totalTrades.toLocaleString("en-US")} on file`
+      : `${e.totalTrades.toLocaleString("en-US")} trades`;
 
     return `
-    <div class="report-item">
-      <div class="report-meta">
-        <div class="report-date">${escHtml(e.dateLabel)}</div>
-        <div class="report-count">${e.totalTrades} trades${newCount}</div>
-        ${chips ? `<div class="report-chips">${chips}</div>` : ""}
-      </div>
-      <span class="report-link"><a href="${escHtml(e.file)}">View report \u2192</a></span>
-    </div>`;
+    <li class="report-item">
+      <span class="report-date report-link"><a href="${escHtml(e.file)}">${escHtml(e.dateLabel)}</a></span>
+      <span class="report-count">${count}</span>
+      <span class="report-chips">${chips}</span>
+    </li>`;
   });
 
-  const emptyMsg = `<p style="color:var(--muted);font-size:0.88rem;">No reports yet. Run <code>congress-trades report:html</code> to generate the first one.</p>`;
+  const emptyMsg = `<p class="empty-msg">No reports yet. Run <code>congress-trades report:html</code> to generate the first one.</p>`;
+  const latest = entries[0];
 
   return `<!DOCTYPE html>
-<html lang="en" data-theme="dark">
+${HTML_OPEN}
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Congress Trades \u2014 Report Archive</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-  <style>${INDEX_CSS}</style>
+  <title>Congress trades</title>
+  ${themeHead(INDEX_CSS)}
 </head>
 <body>
 
-<header class="site-header">
-  <div>
-    <div class="site-title">Congress Trades</div>
-    <div class="site-subtitle">Weekly analysis of unique congressional stock trades</div>
-  </div>
-  <button class="theme-btn" id="theme-btn">\u2600\uFE0F Light</button>
-</header>
+${siteHeader("index.html", latest ? `<nav class="crumbs"><a href="${escHtml(latest.file)}">Latest report</a></nav>` : "")}
 
 <main>
-  <h1>Report Archive</h1>
-  <div class="report-list">
-    ${entries.length ? rows.join("\n") : emptyMsg}
+  <div class="page-head-band">
+    <div class="wrap page-head">
+      <h1>Reports</h1>
+      <p>Each report ranks the most unusual stock trades members of Congress disclosed, and marks what is new since the report before it.</p>
+      ${entries.some((e) => e.newSymbols) ? `<p class="legend">Tickers are this run's new disclosures: <span class="chip">Bought</span> <span class="chip chip-sale">Sold</span></p>` : ""}
+    </div>
+  </div>
+  <div class="wrap">
+    ${entries.length ? `<ul class="report-list">${rows.join("")}</ul>` : emptyMsg}
   </div>
 </main>
 
@@ -291,7 +212,7 @@ export function buildIndexPage(entries: ReportManifestEntry[]): string {
   Not investment advice.
 </footer>
 
-<script>${INDEX_JS}</script>
+<script>${THEME_JS}</script>
 </body>
 </html>`;
 }

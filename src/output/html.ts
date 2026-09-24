@@ -3,6 +3,7 @@ import type { FMPTrade } from "../types/index.js";
 import type { UniquenessResult } from "../scoring/types.js";
 import { SENATE_COMMITTEE_TAXONOMY, HOUSE_COMMITTEE_TAXONOMY } from "../data/committee-sector-taxonomy.js";
 import { memberKey } from "./member-identity.js";
+import { HTML_OPEN, THEME_JS, themeHead, siteHeader, shortDate, shortAmount, tidyAsset } from "./theme.js";
 
 /** Returns the member page filename for a trade's filer, or null if no page exists */
 export type MemberLinker = (trade: FMPTrade) => string | null;
@@ -47,11 +48,6 @@ function esc(s: string | null | undefined): string {
     .replace(/"/g, "&quot;");
 }
 
-function scoreClass(score: number): string {
-  if (score >= 70) return "score-high";
-  if (score >= 50) return "score-med";
-  return "score-low";
-}
 
 function partyClass(party: string | undefined): string {
   if (!party) return "";
@@ -68,10 +64,6 @@ function partyLabel(party: string | undefined): string {
   return party.charAt(0);
 }
 
-function formatAmount(amount: string | undefined): string {
-  if (!amount) return "N/A";
-  return amount.replace(/\$(\d+),(\d+)/g, (_, a, b) => `$${a},${b}`);
-}
 
 function typeLabel(type: string | undefined): string {
   if (!type) return "N/A";
@@ -82,20 +74,13 @@ function typeLabel(type: string | undefined): string {
   return type;
 }
 
-function typeClass(type: string | undefined): string {
-  if (!type) return "";
-  const t = type.toLowerCase();
-  if (t.includes("purchase") || t.includes("exchange")) return "type-buy";
-  if (t.includes("sale")) return "type-sell";
-  return "";
-}
 
 /** Link to the original PTR filing (House Clerk PDF or Senate eFD page), when known. */
 function filingLinkHtml(trade: FMPTrade): string {
   if (!trade.link) return "";
-  const link = `<a class="filing-link" href="${esc(trade.link)}" target="_blank" rel="noopener noreferrer" title="View original PTR filing">Filing ↗</a>`;
+  const link = `<a class="filing-link" href="${esc(trade.link)}" target="_blank" rel="noopener noreferrer" title="Open the original disclosure">Filing</a>`;
   return trade.source === "ocr"
-    ? `${link} <span class="option-tag" title="Transcribed by OCR from a scanned filing — check the original before relying on it">OCR</span>`
+    ? `${link} <span class="option-tag" title="Read by OCR from a scanned paper filing. Check the original before relying on it.">Scanned</span>`
     : link;
 }
 
@@ -133,7 +118,7 @@ function assetTypeLabel(assetType: string | undefined): string {
  */
 function optionTagHtml(trade: FMPTrade): string {
   if (!isOptionTrade(trade)) return "";
-  return `<span class="option-tag" title="Derivative: Options, warrants, or other derivatives — signals timing sensitivity">OPTN</span>`;
+  return `<span class="option-tag" title="Derivative: Options, warrants, or other derivatives — signals timing sensitivity">Options</span>`;
 }
 
 /** Full party name for tooltips, matching the abbreviated party-tag pill (R/D). */
@@ -177,19 +162,19 @@ function committeeBadgeTitle(score: UniquenessResult): string {
 }
 
 /**
- * Small colorized badge pills for the Trader column. Abbreviated (CTEE/SC/HC) since
- * table rows are tight on space — the full description still shows on hover.
+ * Signal words for the Member column. One or two words each, since table rows
+ * are tight on space; the full description still shows on hover.
  */
 function traderBadgesHtml(score: UniquenessResult): string {
   const badges: string[] = [];
   if (score.flags.isRareStock)
     badges.push(`<span class="badge badge-rare" title="Rare: ${esc(FLAG_DESCRIPTIONS.isRareStock.title)}">Rare</span>`);
   if (score.flags.isHighConviction)
-    badges.push(`<span class="badge badge-conviction" title="High Conviction: ${esc(FLAG_DESCRIPTIONS.isHighConviction.title)}">HC</span>`);
+    badges.push(`<span class="badge badge-conviction" title="High Conviction: ${esc(FLAG_DESCRIPTIONS.isHighConviction.title)}">Large</span>`);
   if (score.flags.hasCommitteeRelevance)
-    badges.push(`<span class="badge badge-committee" title="${esc(committeeBadgeTitle(score))}">CTEE</span>`);
+    badges.push(`<span class="badge badge-committee" title="${esc(committeeBadgeTitle(score))}">Committee</span>`);
   if (score.flags.isSmallCap)
-    badges.push(`<span class="badge badge-smallcap" title="Small Cap: ${esc(FLAG_DESCRIPTIONS.isSmallCap.title)}">SC</span>`);
+    badges.push(`<span class="badge badge-smallcap" title="Small Cap: ${esc(FLAG_DESCRIPTIONS.isSmallCap.title)}">Small cap</span>`);
   return badges.join("");
 }
 
@@ -200,14 +185,14 @@ function traderBadgesHtml(score: UniquenessResult): string {
  */
 function derivativeBadgeHtml(trade: FMPTrade): string {
   if (!isOptionTrade(trade)) return "";
-  return `<span class="badge badge-derivative" title="Derivative: ${esc(FLAG_DESCRIPTIONS.isDerivative.title)}">OPTN</span>`;
+  return `<span class="badge badge-derivative" title="Derivative: ${esc(FLAG_DESCRIPTIONS.isDerivative.title)}">Options</span>`;
 }
 
 /** Normalize a PTR owner field (which may be spelled out or abbreviated) to a short code + tooltip. */
 const OWNER_CODES: Record<"spouse" | "joint" | "child", { code: string; title: string }> = {
-  spouse: { code: "SP", title: "Spouse — trade made by the member's spouse rather than the member directly" },
-  joint: { code: "JT", title: "Joint — trade made jointly by the member and spouse" },
-  child: { code: "DC", title: "Dependent Child — trade made by the member's dependent child" },
+  spouse: { code: "Spouse", title: "Spouse — trade made by the member's spouse rather than the member directly" },
+  joint: { code: "Joint", title: "Joint — trade made jointly by the member and spouse" },
+  child: { code: "Child", title: "Dependent Child — trade made by the member's dependent child" },
 };
 
 function ownerCode(owner: string): { code: string; title: string } {
@@ -218,7 +203,7 @@ function ownerCode(owner: string): { code: string; title: string } {
   return { code: owner.toUpperCase(), title: `Owner: ${owner}` };
 }
 
-/** Colorized owner pill (SP/JT/DC) for the Trader column — same color regardless of owner type. */
+/** Owner word (Spouse/Joint/Child) for the Member column. */
 function ownerPillHtml(owner: string): string {
   const { code, title } = ownerCode(owner);
   return `<span class="badge badge-indirect" title="${esc(title)}">${esc(code)}</span>`;
@@ -318,7 +303,7 @@ function saleCsvRow(
 
 /** A section-header "Export CSV" button; the actual CSV text is embedded in the page's csv-data script. */
 function csvButtonHtml(sectionKey: string): string {
-  return `<button class="csv-btn" type="button" data-csv-section="${esc(sectionKey)}">⬇ CSV</button>`;
+  return `<button class="csv-btn" type="button" data-csv-section="${esc(sectionKey)}">Download CSV</button>`;
 }
 
 /** Embeds each section's pre-built CSV text as JSON, read by the shared export click-handler. */
@@ -328,118 +313,33 @@ function csvDataScript(sections: Record<string, { filename: string; csv: string 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Card rendering
+// Shared cells
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderTradeCard(analyzed: AnalyzedTrade, exchangeMap: Map<string, string>, memberLink?: MemberLinker): string {
-  const { trade, trader, score } = analyzed;
-  const rawSym = trade.symbol || "N/A";
-  const sym = esc(rawSym);
-  const exchange = trade.symbol ? exchangeMap.get(trade.symbol) : undefined;
-  const tvUrl = trade.symbol ? tradingViewUrl(trade.symbol, exchange) : null;
-  const symHtml = tvUrl
-    ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
-    : `<span>${sym}</span>`;
-  const desc = esc(trade.assetDescription || "");
-  const filingLink = filingLinkHtml(trade);
-  const rawName = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
-  const name = esc(rawName);
-  const memberUrl = memberLink?.(trade) ?? null;
-  const nameHtml = memberUrl
-    ? `<a href="${esc(memberUrl)}">${name}</a>`
-    : name;
-  const chamber = esc(analyzed.chamber === "senate" ? "Sen." : "Rep.");
-  const party = partyLabel(trader.party);
-  const pClass = partyClass(trader.party);
-  const tLabel = typeLabel(trade.type);
-  const tClass = typeClass(trade.type);
-  const date = esc(trade.transactionDate || "");
-  const amount = esc(formatAmount(trade.amount));
-  const sClass = scoreClass(score.overallScore);
-  const overall = score.overallScore;
+const THIS_YEAR = String(new Date().getFullYear());
 
-  // Factor badges (title attr = native tooltip + CSS tooltip target)
-  const badges: string[] = [];
-  if (score.flags.isRareStock)
-    badges.push('<span class="badge badge-rare" title="Stock rarely traded by Congress — fewer than 4 total trades">Rare</span>');
-  if (score.flags.isHighConviction)
-    badges.push('<span class="badge badge-conviction" title="Trade is significantly larger than this member\'s typical trade size">High Conviction</span>');
-  if (score.flags.hasCommitteeRelevance)
-    badges.push('<span class="badge badge-committee" title="Trader serves on a committee that oversees this stock\'s sector — potential insider knowledge">Committee</span>');
-  if (score.flags.isDerivative)
-    badges.push('<span class="badge badge-derivative" title="Options, warrants, or other derivatives — signals timing sensitivity">Derivative</span>');
-  if (score.flags.isSmallCap)
-    badges.push('<span class="badge badge-smallcap" title="Small or micro-cap stock (market cap below $2B) — less analyst coverage">Small Cap</span>');
-  if (score.flags.isIndirectOwnership)
-    badges.push('<span class="badge badge-indirect" title="Trade made via a spouse or family member rather than directly by the member">Indirect</span>');
+/** Ticker linked to its TradingView chart, or a "No ticker" marker for bonds, funds and unparsed rows. */
+function symbolHtml(trade: FMPTrade, exchangeMap: Map<string, string>): string {
+  if (!trade.symbol) return `<span class="no-ticker" title="The filing gives no ticker for this asset">No ticker</span>`;
+  const url = tradingViewUrl(trade.symbol, exchangeMap.get(trade.symbol));
+  return `<a class="symbol-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(trade.symbol)}</a>`;
+}
 
-  // Score explanation lines
-  const details: string[] = [];
-  if (score.explanation.marketCap) {
-    const cap = score.explanation.marketCap;
-    const capM = (cap.value / 1_000_000).toFixed(0);
-    details.push(`<li>Market cap: $${capM}M <em>(${esc(cap.category)})</em></li>`);
-  }
-  if (score.explanation.conviction && score.flags.isHighConviction) {
-    const m = score.explanation.conviction.multiplier.toFixed(1);
-    details.push(`<li>Conviction: ${m}× typical trade</li>`);
-  }
-  if (score.explanation.rarity) {
-    const r = score.explanation.rarity;
-    details.push(`<li>Rarity: ${esc(r.category)} (${r.totalCongressTrades} congress trade${r.totalCongressTrades !== 1 ? "s" : ""})</li>`);
-  }
-  if (score.flags.hasCommitteeRelevance && score.explanation.committeeRelevance) {
-    const rel = score.explanation.committeeRelevance;
-    const sector = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
-    details.push(`<li class="detail-warning">Committee oversight: ${esc(sector)}</li>`);
-    if (rel.overlappingCommittees.length) {
-      const abbrs = rel.overlappingCommittees
-        .map((id) => {
-          const fullName = COMMITTEE_NAMES.get(id);
-          return fullName
-            ? `<abbr class="committee-abbr" title="${esc(fullName)}">${esc(id)}</abbr>`
-            : esc(id);
-        })
-        .join(", ");
-      details.push(`<li class="detail-warning">Committees: ${abbrs}</li>`);
-    }
-  }
-  if (score.flags.isDerivative && score.explanation.derivative) {
-    details.push(`<li>Asset type: ${esc(assetTypeLabel(score.explanation.derivative.assetType))}</li>`);
-  }
-  if (score.flags.isIndirectOwnership && score.explanation.ownership) {
-    details.push(`<li>Ownership: ${esc(score.explanation.ownership.owner)}</li>`);
-  }
+function amountHtml(amount: string | undefined): string {
+  const short = shortAmount(amount);
+  return short && short !== amount ? `<span title="${esc(amount)}">${esc(short)}</span>` : esc(amount || "");
+}
 
-  const detailsHtml = details.length
-    ? `<ul class="trade-details">${details.join("")}</ul>`
-    : "";
+function partyTagHtml(party: string | undefined): string {
+  const label = partyLabel(party);
+  return label ? `<span class="party-tag ${partyClass(party)}" title="${esc(partyFullName(party))}">${esc(label)}</span>` : "";
+}
 
-  const badgesHtml = badges.length
-    ? `<div class="badge-row">${badges.join("")}</div>`
-    : "";
-
-  return `
-<article class="trade-card">
-  <div class="card-top">
-    <div class="symbol-block">
-      <span class="symbol">${symHtml}</span>
-      <span class="trade-type ${tClass}">${tLabel}</span>
-    </div>
-    <span class="score-badge ${sClass}">${overall}</span>
-  </div>
-  ${desc || filingLink ? `<p class="asset-desc">${desc}${filingLink ? ` ${filingLink}` : ""}</p>` : ""}
-  <div class="trader-row">
-    <span class="trader-name">${chamber} ${nameHtml}</span>
-    ${party ? `<span class="party-tag ${pClass}">${party}</span>` : ""}
-  </div>
-  <div class="meta-row">
-    <span class="amount">${amount}</span>
-    <span class="date">${date}</span>
-  </div>
-  ${badgesHtml}
-  ${detailsHtml}
-</article>`;
+function sideLabel(type: string | undefined): string {
+  const t = (type || "").toLowerCase();
+  if (t.includes("sale")) return "Sold";
+  if (t.includes("exchange")) return "Exchanged";
+  return "Bought";
 }
 
 function renderSaleRow(
@@ -450,505 +350,333 @@ function renderSaleRow(
   scoreLookup?: Map<string, AnalyzedTrade>,
   isNew = false
 ): string {
-  const rawSym = trade.symbol || "N/A";
-  const sym = esc(rawSym);
-  const exchange = trade.symbol ? exchangeMap.get(trade.symbol) : undefined;
-  const tvUrl = trade.symbol ? tradingViewUrl(trade.symbol, exchange) : null;
-  const symCell = tvUrl
-    ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
-    : sym;
-  const rawName = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
-  const name = esc(rawName);
+  const name = esc(`${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim());
   const memberUrl = memberLink?.(trade) ?? null;
   const nameHtml = memberUrl ? `<a href="${esc(memberUrl)}">${name}</a>` : name;
-  const pLabel = partyLabel(party);
-  const pClass = partyClass(party);
-  const pTitle = partyFullName(party);
-  const amount = esc(formatAmount(trade.amount));
-  const date = esc(trade.transactionDate || "");
-  const desc = esc(trade.assetDescription || "");
   const ownerRaw = trade.owner && trade.owner.toLowerCase() !== "self" ? trade.owner : "";
-  const ownerPill = ownerRaw ? ownerPillHtml(ownerRaw) : "";
-  const filingLink = filingLinkHtml(trade);
-  const derivativeBadge = derivativeBadgeHtml(trade);
   const analyzed = scoreLookup?.get(tradeKey(trade));
-  const flagBadges = analyzed ? traderBadgesHtml(analyzed.score) : "";
+  const signals = [
+    analyzed ? traderBadgesHtml(analyzed.score) : "",
+    derivativeBadgeHtml(trade),
+    ownerRaw ? ownerPillHtml(ownerRaw) : "",
+  ].filter(Boolean).join("");
+  const filingLink = filingLinkHtml(trade);
 
   return `
 <tr${isNew ? ' class="row-new"' : ""}>
-  <td class="sale-date">${date}${isNew ? ' <span class="new-tag" title="Disclosed since the previous report">NEW</span>' : ""}</td>
-  <td class="sale-sym">${symCell}</td>
-  <td class="sale-amount">${amount}</td>
-  <td class="sale-trader"><div class="trader-cell">${nameHtml}${pLabel ? ` <span class="party-tag ${pClass}" title="${esc(pTitle)}">${pLabel}</span>` : ""}${flagBadges}${derivativeBadge ? ` ${derivativeBadge}` : ""}${ownerPill ? ` ${ownerPill}` : ""}</div></td>
-  <td class="sale-desc">${desc}${filingLink ? ` ${filingLink}` : ""}</td>
+  <td class="sale-date">${esc(shortDate(trade.transactionDate, THIS_YEAR))}${isNew ? ' <span class="new-tag" title="Disclosed since the previous report">New</span>' : ""}</td>
+  <td class="sale-sym">${symbolHtml(trade, exchangeMap)}</td>
+  <td class="sale-amount">${amountHtml(trade.amount)}</td>
+  <td class="sale-trader"><div class="trader-cell">${nameHtml}${partyTagHtml(party)}${signals}</div></td>
+  <td class="sale-desc">${esc(tidyAsset(trade.assetDescription))}${filingLink ? ` ${filingLink}` : ""}</td>
 </tr>`;
 }
 
+function tradeTableHtml(
+  rows: Array<{ trade: FMPTrade; party: string | undefined }>,
+  exchangeMap: Map<string, string>,
+  memberLink?: MemberLinker,
+  scoreLookup?: Map<string, AnalyzedTrade>,
+  isNewlyDisclosed: (trade: FMPTrade) => boolean = () => false
+): string {
+  return `<div class="sales-table-wrap">
+        <table>
+          <thead><tr><th>Traded</th><th>Ticker</th><th>Amount</th><th>Member</th><th>Asset</th></tr></thead>
+          <tbody>
+            ${rows.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberLink, scoreLookup, isNewlyDisclosed(trade))).join("\n            ")}
+          </tbody>
+        </table>
+      </div>`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// CSS
+// Ranked "most unusual" entries
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CSS = `
-  :root {
-    --bg: #1e1e2e;
-    --surface: #313244;
-    --surface2: #45475a;
-    --border: #585b70;
-    --text: #cdd6f4;
-    --subtext: #a6adc8;
-    --muted: #6c7086;
-    --accent: #89b4fa;
-    --green: #a6e3a1;
-    --red: #f38ba8;
-    --yellow: #f9e2af;
-    --peach: #fab387;
-    --mauve: #cba6f7;
-    --teal: #94e2d5;
-    --score-high: #a6e3a1;
-    --score-med: #f9e2af;
-    --score-low: #6c7086;
-    --party-r: #f38ba8;
-    --party-d: #89b4fa;
-    --new: #f9e2af;
-    --new-bg: rgba(249,226,175,0.07);
-    --radius: 10px;
-    --shadow: 0 2px 12px rgba(0,0,0,0.4);
-  }
-  [data-theme="light"] {
-    --bg: #eff1f5;
-    --surface: #e6e9ef;
-    --surface2: #dce0e8;
-    --border: #bcc0cc;
-    --text: #4c4f69;
-    --subtext: #5c5f77;
-    --muted: #9ca0b0;
-    --accent: #1e66f5;
-    --green: #40a02b;
-    --red: #d20f39;
-    --yellow: #df8e1d;
-    --peach: #fe640b;
-    --mauve: #8839ef;
-    --teal: #179299;
-    --score-high: #40a02b;
-    --score-med: #df8e1d;
-    --score-low: #9ca0b0;
-    --party-r: #d20f39;
-    --party-d: #1e66f5;
-    --new: #7d5400;
-    --new-bg: rgba(125,84,0,0.07);
-  }
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html { font-size: 15px; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Inter', system-ui, sans-serif;
-    line-height: 1.5;
-    min-height: 100vh;
-  }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+function committeeAbbrs(ids: string[]): string {
+  return ids.map((id) => {
+    const fullName = COMMITTEE_NAMES.get(id);
+    return fullName ? `<abbr class="committee-abbr" title="${esc(fullName)}">${esc(id)}</abbr>` : esc(id);
+  }).join(", ");
+}
 
-  /* Header */
-  .site-header {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 1rem 1.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-  .site-title { font-size: 1.1rem; font-weight: 700; color: var(--accent); letter-spacing: 0.02em; }
-  .site-subtitle { font-size: 0.8rem; color: var(--subtext); margin-top: 0.15rem; }
-  .header-right { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; }
-  .theme-btn {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 0.35rem 0.75rem;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.8rem;
-    transition: background 0.15s;
-  }
-  .theme-btn:hover { background: var(--border); }
+function capText(value: number): string {
+  return value >= 1e9 ? `$${+(value / 1e9).toFixed(1)}B` : `$${Math.round(value / 1e6)}M`;
+}
 
-  /* Main content */
-  main { max-width: 1300px; margin: 0 auto; padding: 1.5rem; }
+function ownerPhrase(owner: string): string {
+  const { code } = ownerCode(owner);
+  if (code === "Spouse") return "Spouse's account";
+  if (code === "Joint") return "Joint account";
+  if (code === "Child") return "Dependent child's account";
+  return `Owner: ${owner}`;
+}
 
-  /* Section */
-  .section { margin-bottom: 2.5rem; }
-  .section-header {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
+/** Why a trade scored the way it did, as short sentences (HTML). */
+function reasonsHtml(score: UniquenessResult): string[] {
+  const { flags, explanation: ex } = score;
+  const out: string[] = [];
+  if (flags.isRareStock && !ex.rarity) out.push("Rarely traded by Congress");
+  if (ex.rarity) {
+    const n = ex.rarity.totalCongressTrades;
+    out.push(n <= 1 ? "The only congressional trade in it" : `Congress has traded it ${n} times`);
   }
-  .section-title { font-size: 1rem; font-weight: 700; color: var(--text); }
-  .section-count { font-size: 0.8rem; color: var(--muted); }
+  if (flags.isHighConviction && ex.conviction) out.push(`${ex.conviction.multiplier.toFixed(1)}× their usual trade size`);
+  if (flags.hasCommitteeRelevance && ex.committeeRelevance) {
+    const rel = ex.committeeRelevance;
+    const sector = [rel.stockSector, rel.stockIndustry].filter(Boolean).join(" / ");
+    const who = rel.overlappingCommittees.length ? `Sits on ${committeeAbbrs(rel.overlappingCommittees)}` : "Sits on a committee";
+    out.push(`<span class="oversight">${who}, which oversees ${esc(sector || "this sector")}</span>`);
+  }
+  if (flags.isSmallCap && ex.marketCap) out.push(`Small company (${capText(ex.marketCap.value)})`);
+  if (flags.isDerivative) out.push(ex.derivative ? esc(assetTypeLabel(ex.derivative.assetType)) : "Options or other derivative");
+  if (flags.isIndirectOwnership && ex.ownership) out.push(esc(ownerPhrase(ex.ownership.owner)));
+  return out;
+}
 
-  /* Stats bar */
-  .stats-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.85rem 1rem;
-  }
-  .stat-item { font-size: 0.82rem; color: var(--subtext); }
-  .stat-item strong { color: var(--text); }
-  .stat-sep { color: var(--border); user-select: none; }
+function renderPick(analyzed: AnalyzedTrade, idx: string, exchangeMap: Map<string, string>, memberLink?: MemberLinker): string {
+  const { trade, trader, score } = analyzed;
+  const name = `${trade.firstName ?? ""} ${trade.lastName ?? ""}`.trim();
+  const memberUrl = memberLink?.(trade) ?? null;
+  const nameHtml = memberUrl ? `<a href="${esc(memberUrl)}">${esc(name)}</a>` : esc(name);
+  const ex = score.explanation;
+  const reasons = reasonsHtml(score);
+  const facts: Array<[string, string]> = [
+    ["Traded", esc(shortDate(trade.transactionDate, "any") || "Unknown")],
+    ["Reported amount", esc(trade.amount || "Not given")],
+  ];
+  if (typeLabel(trade.type) !== "Buy") facts.push(["Transaction", esc(typeLabel(trade.type))]);
+  if (ex.marketCap && ex.marketCap.category !== "unknown") facts.push(["Company size", `${capText(ex.marketCap.value)} (${esc(ex.marketCap.category)} cap)`]);
+  if (ex.rarity) facts.push(["Congress trades in it", `${ex.rarity.totalCongressTrades} by ${ex.rarity.uniqueTraders} member${ex.rarity.uniqueTraders === 1 ? "" : "s"}`]);
+  if (ex.conviction) facts.push(["Their usual trade", `${esc(shortAmount(`$${Math.round(ex.conviction.averageSize)}`))}, this one ${ex.conviction.multiplier.toFixed(1)}×`]);
+  if (ex.committeeRelevance?.overlappingCommittees.length) facts.push(["Committees", committeeAbbrs(ex.committeeRelevance.overlappingCommittees)]);
+  if (trade.assetType) facts.push(["Asset type", esc(assetTypeLabel(trade.assetType))]);
+  if (trade.source === "ocr") facts.push(["Source", "Read from a scanned paper filing, so check it against the original"]);
+  const chart = trade.symbol ? tradingViewUrl(trade.symbol, exchangeMap.get(trade.symbol)) : null;
 
-  /* Trade card grid */
-  .card-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1rem;
-  }
-  .trade-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 1rem;
-    box-shadow: var(--shadow);
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .card-top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-  .symbol-block { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-  .symbol { font-size: 1.1rem; font-weight: 800; letter-spacing: 0.04em; }
-  .symbol-link { color: var(--accent); text-decoration: none; }
-  .symbol-link:hover { text-decoration: underline; }
-  .trade-type {
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 0.15rem 0.5rem;
-    border-radius: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .type-buy { background: rgba(166,227,161,0.15); color: var(--green); border: 1px solid rgba(166,227,161,0.3); }
-  .type-sell { background: rgba(243,139,168,0.15); color: var(--red); border: 1px solid rgba(243,139,168,0.3); }
+  return `
+<li class="pick trade-card" data-ticker="${trade.symbol ? 1 : 0}">
+  <div class="pick-main">
+    <div class="score" title="Uniqueness score ${score.overallScore} of 100"><b>${score.overallScore}</b><span class="track"><i style="width:${Math.min(100, Math.max(0, score.overallScore))}%"></i></span></div>
+    <div class="asset">${trade.symbol ? `<span class="tick">${symbolHtml(trade, exchangeMap)}</span>` : `${symbolHtml(trade, exchangeMap)} `}<span class="name">${esc(tidyAsset(trade.assetDescription))}</span></div>
+    <div class="who">${nameHtml} ${partyTagHtml(trader.party)}<small>${analyzed.chamber === "senate" ? "Senate" : "House"}</small></div>
+    <div class="amt">${amountHtml(trade.amount)}<small>${sideLabel(trade.type) === "Bought" ? "" : `<span class="side-note">${sideLabel(trade.type)}</span> `}${esc(shortDate(trade.transactionDate, THIS_YEAR))}</small></div>
+    <button class="more" type="button" aria-expanded="false" aria-controls="${idx}" aria-label="Details for ${esc(trade.symbol || tidyAsset(trade.assetDescription))}">
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.5 6 8.5l4-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+    </button>
+    ${reasons.length ? `<p class="why">${reasons.join(". ")}.</p>` : ""}
+  </div>
+  <div class="pick-detail" id="${idx}">
+    <dl>${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    <div class="links">
+      ${trade.link ? `<a href="${esc(trade.link)}" target="_blank" rel="noopener noreferrer">Open the filing</a>` : ""}
+      ${memberUrl ? `<a href="${esc(memberUrl)}">All of ${esc(name)}'s trades</a>` : ""}
+      ${chart ? `<a href="${esc(chart)}" target="_blank" rel="noopener noreferrer">Chart</a>` : ""}
+    </div>
+  </div>
+</li>`;
+}
 
-  .score-badge {
-    font-size: 1rem;
-    font-weight: 800;
-    padding: 0.2rem 0.55rem;
-    border-radius: 6px;
-    flex-shrink: 0;
-  }
-  .score-high { background: rgba(166,227,161,0.2); color: var(--score-high); }
-  .score-med  { background: rgba(249,226,175,0.2); color: var(--score-med); }
-  .score-low  { background: rgba(108,112,134,0.15); color: var(--score-low); }
+// ─────────────────────────────────────────────────────────────────────────────
+// Report page CSS + JS (on top of the shared theme)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  .asset-desc { font-size: 0.78rem; color: var(--subtext); }
+const REPORT_CSS = `
+  /* 1. New since the last report (the hero) */
+  .fresh { padding-top: 2.5rem; padding-bottom: 2.75rem; }
+  .fresh-band { border-top: 1px solid var(--line); }
+  .fresh h1 {
+    margin-bottom: 0.4rem; font-size: clamp(1.9rem, 4.4vw, 3.1rem); line-height: 1.08;
+    font-weight: 600; font-stretch: 78%; letter-spacing: -0.02em; max-width: 22ch;
+  }
+  .fresh .lede { margin-bottom: 2rem; color: var(--sub); max-width: 62ch; }
+  .fresh .lede:last-child { margin-bottom: 0; }
+  .filers { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1.25rem 2.5rem; }
+  .filer h2 { margin-bottom: 0.35rem; font-size: 1.05rem; font-weight: 600; display: flex; align-items: baseline; gap: 0.5rem; }
+  .filer h2 .count { color: var(--muted); font-weight: 400; font-size: 0.88rem; margin-left: auto; }
+  .filing-list { list-style: none; padding: 0; border-top: 2px solid var(--signal); }
+  .filing-list li { display: grid; grid-template-columns: 4.6rem 1fr auto; gap: 0.1rem 0.75rem; align-items: baseline; padding: 0.55rem 0; border-bottom: 1px solid var(--line); }
+  .filing-list .side { font-size: 0.82rem; font-weight: 600; }
+  .filing-list .side.sold { color: var(--muted); }
+  .filing-list .what { min-width: 0; }
+  .filing-list .what b { font-weight: 600; margin-right: 0.35rem; }
+  .filing-list .what .desc { color: var(--sub); }
+  .filing-list .size { text-align: right; font-size: 0.9rem; white-space: nowrap; }
+  .filing-list .when { grid-column: 2 / 4; font-size: 0.8rem; color: var(--muted); }
+  .filing-list .more-filed { display: block; grid-template-columns: none; font-size: 0.88rem; color: var(--sub); }
 
-  .filing-link { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
-  .filing-link:hover { color: var(--accent); text-decoration: underline; }
+  /* 2. Most unusual purchases */
+  .unusual, .every { border-top: 1px solid var(--line); }
+  .unusual > .wrap { padding-top: 2.5rem; padding-bottom: 1rem; }
+  .every > .wrap { padding-top: 2.5rem; padding-bottom: 2rem; }
+  .band-head { display: flex; align-items: end; justify-content: space-between; gap: 1rem 2rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+  .band-head h2 { font-size: 1.6rem; font-weight: 600; font-stretch: 85%; letter-spacing: -0.01em; }
+  .band-head p { margin-top: 0.2rem; color: var(--sub); max-width: 58ch; font-size: 0.95rem; }
+  .views { display: flex; gap: 0.5rem 0.75rem; flex-wrap: wrap; align-items: center; }
+  .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 999px; padding: 2px; }
+  .seg button { background: none; border: 0; border-radius: 999px; padding: 0.3rem 0.85rem; font-size: 0.86rem; color: var(--sub); white-space: nowrap; }
+  .seg button[aria-pressed="true"], .seg button.active { background: var(--ink); color: var(--ground); }
+  .check { display: inline-flex; gap: 0.4rem; align-items: center; font-size: 0.86rem; color: var(--sub); }
+  .check input { accent-color: var(--signal); }
+  .views .csv-btn { margin-left: 0; }
 
-  .trader-row { display: flex; align-items: center; gap: 0.5rem; }
-  .trader-name { font-size: 0.88rem; font-weight: 600; }
+  .ranked { list-style: none; padding: 0; }
+  .ranked[hidden], .pick[hidden] { display: none; }
+  .pick { border-top: 1px solid var(--line); }
+  .pick-main { display: grid; align-items: center; gap: 0.2rem 1.25rem; padding: 1rem 0; grid-template-columns: 7.5rem minmax(0, 1.5fr) minmax(0, 1fr) 8.5rem 2rem; }
+  /* Every score sits on a 0–100 track, so 41 reads as "less than half of max". */
+  .score { display: grid; gap: 0.3rem; }
+  .score b { font-size: 1.7rem; font-weight: 600; font-stretch: 75%; line-height: 1; }
+  .track { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .track i { display: block; height: 100%; background: var(--signal); }
+  .pick .asset { min-width: 0; }
+  .pick .tick { font-weight: 700; margin-right: 0.45rem; }
+  .pick .name { color: var(--sub); }
+  .why { grid-column: 2 / 3; margin-top: 0.15rem; font-size: 0.9rem; color: var(--sub); }
+  .why .oversight { color: var(--ink); }
+  .who { min-width: 0; }
+  .who a { font-weight: 500; }
+  .who .party-tag { margin-left: 0.2rem; }
+  .who small, .amt small { display: block; color: var(--muted); font-size: 0.8rem; }
+  .amt { text-align: right; }
+  .amt .side-note { color: var(--ink); font-weight: 600; }
+  .more { width: 2rem; height: 2rem; border-radius: 50%; border: 1px solid var(--line); background: none; display: grid; place-items: center; color: var(--sub); padding: 0; }
+  .more:hover { border-color: var(--line-strong); color: var(--ink); }
+  .more svg { transition: transform 160ms ease; }
+  .pick.open .more svg { transform: rotate(180deg); }
+  .pick-detail { display: none; padding: 0 0 1.2rem 8.75rem; }
+  .pick.open .pick-detail { display: block; }
+  .pick-detail dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1.25rem; margin: 0; font-size: 0.9rem; max-width: 46rem; }
+  .pick-detail dt { color: var(--muted); }
+  .pick-detail dd { margin: 0; }
+  .pick-detail .links { margin-top: 0.75rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; font-size: 0.9rem; }
+  .ranked-foot { border-top: 1px solid var(--line); padding: 0.9rem 0; color: var(--muted); font-size: 0.88rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .ranked-foot button { background: none; border: 1px solid var(--line-strong); border-radius: 999px; padding: 0.3rem 0.9rem; font-size: 0.86rem; }
+  .ranked-foot button[hidden] { display: none; }
+  .empty { padding: 1.5rem 0; color: var(--sub); border-top: 1px solid var(--line); }
 
-  .party-tag {
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    cursor: help;
-  }
-  .party-r { background: rgba(243,139,168,0.2); color: var(--party-r); }
-  .party-d { background: rgba(137,180,250,0.2); color: var(--party-d); }
-
-  .meta-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 0.82rem;
-    color: var(--subtext);
-  }
-  .amount { font-weight: 500; }
-
-  .badge-row { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.25rem; }
-  .badge {
-    font-size: 0.65rem;
-    font-weight: 600;
-    padding: 0.15rem 0.45rem;
-    border-radius: 4px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    position: relative;
-    cursor: help;
-  }
-  /* CSS tooltip shown on hover (supplements native title attr) */
-  .badge::after {
-    content: attr(title);
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--surface2);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 0.3rem 0.6rem;
-    font-size: 0.72rem;
-    font-weight: 400;
-    text-transform: none;
-    letter-spacing: 0;
-    white-space: nowrap;
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.15s;
-    z-index: 100;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-    max-width: 280px;
-    white-space: normal;
-    text-align: center;
-  }
-  .badge:hover::after { opacity: 1; }
-  .badge-rare       { background: rgba(203,166,247,0.2); color: var(--mauve); }
-  .badge-conviction { background: rgba(250,179,135,0.2); color: var(--peach); }
-  .badge-committee  { background: rgba(243,139,168,0.2); color: var(--red); }
-  .badge-derivative { background: rgba(148,226,213,0.2); color: var(--teal); }
-  .badge-smallcap   { background: rgba(249,226,175,0.2); color: var(--yellow); }
-  .badge-indirect   { background: rgba(108,112,134,0.2); color: var(--muted); }
-
-  .trade-details {
-    list-style: none;
-    font-size: 0.77rem;
-    color: var(--subtext);
-    border-top: 1px solid var(--border);
-    padding-top: 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .trade-details li { padding-left: 0.75rem; position: relative; }
-  .trade-details li::before { content: "·"; position: absolute; left: 0; }
-  .detail-warning { color: var(--red) !important; }
-  abbr.committee-abbr {
-    text-decoration: underline dotted var(--red);
-    cursor: help;
-    font-style: normal;
-  }
-
-  /* Sales table */
-  .sales-table-wrap { overflow-x: auto; }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.83rem;
-  }
-  th {
-    text-align: left;
-    font-size: 0.72rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid var(--border);
-  }
-  td {
-    padding: 0.45rem 0.75rem;
-    border-bottom: 1px solid var(--surface2);
-    vertical-align: top;
-  }
-  tr:hover td { background: var(--surface2); }
-  /* Newly disclosed since the previous run. The chronological sort buries these
-     mid-table (filings lag transactions by ~a month), so they are called out in
-     gold rather than reordered. */
-  tr.row-new td { background: var(--new-bg); }
-  tr.row-new td,
-  tr.row-new .sale-date,
-  tr.row-new .sale-amount,
-  tr.row-new .sale-desc,
-  tr.row-new .sale-sym,
-  tr.row-new td a { color: var(--new); }
-  /* Links lose their accent cue inside a gold row, so keep them underlined. */
-  tr.row-new td a { text-decoration: underline; text-underline-offset: 2px; }
-  tr.row-new td:first-child { box-shadow: inset 2px 0 0 var(--new); }
-  .new-tag {
-    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em;
-    color: var(--new); border: 1px solid var(--new);
-    border-radius: 3px; padding: 0 0.25rem; margin-left: 0.35rem;
-    vertical-align: 1px;
-  }
-  .sale-date  { white-space: nowrap; color: var(--subtext); width: 7rem; }
-  .sale-sym   { font-weight: 700; color: var(--accent); width: 5rem; }
-  .sale-amount { white-space: nowrap; color: var(--subtext); }
-  .sale-trader { min-width: 10rem; }
-  .trader-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 0.3rem; }
-  .sale-desc  { color: var(--muted); font-size: 0.75rem; }
-  .owner-tag  {
-    font-size: 0.65rem;
-    font-weight: 600;
-    color: var(--muted);
-    background: rgba(108,112,134,0.2);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 0.05rem 0.35rem;
-    cursor: help;
-  }
-  .option-tag { font-size: 0.65rem; color: var(--teal); border: 1px solid var(--teal); border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.35rem; font-weight: 600; }
-
-  /* CSV export buttons */
-  .csv-btn {
-    margin-left: auto;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 0.72rem;
-    font-weight: 600;
-    padding: 0.25rem 0.6rem;
-    border-radius: 6px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.15s, color 0.15s;
-  }
-  .csv-btn:hover { background: var(--border); color: var(--accent); }
-
-  /* Footer */
-  footer {
-    text-align: center;
-    font-size: 0.75rem;
-    color: var(--muted);
-    padding: 2rem 1rem;
-    border-top: 1px solid var(--border);
-    margin-top: 2rem;
-  }
-
-  /* Party nav links */
-  .party-nav {
-    font-size: 0.78rem;
-    font-weight: 600;
-    padding: 0.25rem 0.6rem;
-    border-radius: 4px;
-    text-decoration: none;
-    border: 1px solid var(--border);
-    color: var(--text);
-    transition: background 0.15s;
-  }
-  .party-nav:hover { background: var(--surface2); text-decoration: none; }
-  .party-nav-r { color: var(--party-r); border-color: rgba(243,139,168,0.4); }
-  .party-nav-d { color: var(--party-d); border-color: rgba(137,180,250,0.4); }
-
-  /* Tabs */
-  .tab-bar {
-    display: flex;
-    gap: 0.25rem;
-    border-bottom: 2px solid var(--border);
-    margin-bottom: 1.5rem;
-    flex-wrap: wrap;
-  }
-  .tab-btn {
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
-    padding: 0.55rem 1rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--muted);
-    cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
-    white-space: nowrap;
-  }
-  .tab-btn:hover { color: var(--text); }
-  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  /* 3. Every trade */
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
-  /* Responsive */
-  @media (max-width: 600px) {
-    .site-header { flex-direction: column; align-items: flex-start; }
-    .card-grid { grid-template-columns: 1fr; }
-    .stats-bar { flex-direction: column; gap: 0.4rem; }
-    .tab-btn { padding: 0.45rem 0.65rem; font-size: 0.78rem; }
+  /* 4. Elsewhere: parties and past runs */
+  .rest { border-top: 1px solid var(--line); }
+  .elsewhere { padding-top: 2.5rem; padding-bottom: 2rem; display: grid; grid-template-columns: 1fr 1.2fr; gap: 2.5rem 4rem; }
+  .elsewhere h2 { margin-bottom: 0.8rem; font-size: 1.1rem; font-weight: 600; }
+  .browse { list-style: none; padding: 0; }
+  .browse li { border-bottom: 1px solid var(--line); }
+  .browse a { display: flex; justify-content: space-between; padding: 0.6rem 0; text-decoration: none; }
+  .browse a:hover span:first-child { text-decoration: underline; text-decoration-color: var(--signal); text-underline-offset: 3px; }
+  .browse .n { color: var(--muted); }
+  .runs { display: grid; gap: 6px; height: 7rem; max-width: 30rem; }
+  .runs a { display: flex; flex-direction: column; justify-content: end; height: 100%; text-decoration: none; gap: 4px; }
+  .runs .bar { background: var(--line-strong); border-radius: 2px 2px 0 0; min-height: 2px; }
+  .runs a:hover .bar, .runs a[aria-current] .bar { background: var(--signal); }
+  .runs .d { font-size: 0.68rem; color: var(--muted); text-align: center; white-space: nowrap; }
+  .runs-note { margin-top: 0.6rem; font-size: 0.85rem; color: var(--muted); max-width: 30rem; }
+
+  @media (max-width: 860px) {
+    .pick-main { grid-template-columns: 4.5rem minmax(0, 1fr) 2rem; }
+    .score b { font-size: 1.4rem; }
+    .pick .asset { grid-column: 2; }
+    .more { grid-column: 3; grid-row: 1; }
+    .why, .who, .amt { grid-column: 2 / 4; text-align: left; }
+    .who small, .amt small { display: inline; margin-left: 0.4rem; }
+    .pick-detail { padding-left: 5.75rem; }
+    .elsewhere { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    .filing-list li { grid-template-columns: 4rem 1fr; }
+    .filing-list .size { grid-column: 2; text-align: left; }
+    .pick-detail { padding-left: 0; }
+    .pick-detail dl { grid-template-columns: 1fr; gap: 0; }
+    .pick-detail dd { margin-bottom: 0.4rem; }
   }
 `;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// JS
-// ─────────────────────────────────────────────────────────────────────────────
-
-const JS = `
+const REPORT_JS = `
 (function () {
-  var root = document.documentElement;
-  var btn = document.getElementById('theme-btn');
-  var saved = (function(){ try { return localStorage.getItem('congress-theme'); } catch(e){ return null; } })();
-  if (saved === 'light') root.setAttribute('data-theme', 'light');
+  // Report picker
+  var run = document.getElementById('run');
+  if (run) run.addEventListener('change', function () { location.href = run.value; });
 
-  function updateLabel() {
-    var current = root.getAttribute('data-theme');
-    if (btn) btn.textContent = current === 'light' ? '\u{1F319} Dark' : '\u2600\uFE0F Light';
-  }
-  updateLabel();
-
-  if (btn) {
-    btn.addEventListener('click', function () {
-      var current = root.getAttribute('data-theme');
-      var next = current === 'light' ? 'dark' : 'light';
-      root.setAttribute('data-theme', next);
-      try { localStorage.setItem('congress-theme', next); } catch(e) {}
-      updateLabel();
+  // Most unusual: which list, ticker filter, show more, expand
+  var PAGE = 10, shown = PAGE, view = 'top';
+  var views = document.querySelectorAll('[data-view]');
+  var lists = document.querySelectorAll('[data-list]');
+  var tickerOnly = document.getElementById('ticker-only');
+  var more = document.getElementById('show-more');
+  var count = document.getElementById('ranked-count');
+  var csv = document.getElementById('ranked-csv');
+  function render() {
+    var total = 0, visible = 0;
+    lists.forEach(function (list) {
+      var active = list.dataset.list === view;
+      list.hidden = !active;
+      if (!active) return;
+      list.querySelectorAll('.pick').forEach(function (li) {
+        var ok = !(tickerOnly && tickerOnly.checked && li.dataset.ticker === '0');
+        if (ok) total++;
+        li.hidden = !ok || total > shown;
+        if (!li.hidden) visible++;
+      });
+      var empty = list.querySelector('.empty');
+      if (empty) empty.hidden = total > 0;
     });
+    if (count) count.textContent = total ? 'Showing ' + visible + ' of ' + total : '';
+    if (more) more.hidden = visible >= total;
   }
+  views.forEach(function (b) {
+    b.addEventListener('click', function () {
+      view = b.dataset.view; shown = PAGE;
+      views.forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); });
+      if (csv) csv.dataset.csvSection = b.dataset.csv;
+      render();
+    });
+  });
+  if (tickerOnly) tickerOnly.addEventListener('change', function () { shown = PAGE; render(); });
+  if (more) more.addEventListener('click', function () { shown += PAGE; render(); });
+  document.querySelectorAll('.ranked').forEach(function (list) {
+    list.addEventListener('click', function (e) {
+      var b = e.target.closest('.more');
+      if (!b) return;
+      var li = b.closest('.pick');
+      li.classList.toggle('open');
+      b.setAttribute('aria-expanded', String(li.classList.contains('open')));
+    });
+  });
+  render();
 
-  // Tab switching
+  // Every trade: purchases / sales
   var tabBtns = document.querySelectorAll('.tab-btn');
   var tabPanels = document.querySelectorAll('.tab-panel');
   function activateTab(id) {
-    tabBtns.forEach(function(b) { b.classList.toggle('active', b.dataset.tab === id); });
-    tabPanels.forEach(function(p) { p.classList.toggle('active', p.id === id); });
-    try { localStorage.setItem('congress-tab', id); } catch(e) {}
-  }
-  tabBtns.forEach(function(b) {
-    b.addEventListener('click', function() { activateTab(b.dataset.tab); });
-  });
-  // Restore last tab or default to first
-  var savedTab = (function(){ try { return localStorage.getItem('congress-tab'); } catch(e){ return null; } })();
-  var firstTab = tabBtns.length ? tabBtns[0].dataset.tab : null;
-  activateTab(savedTab && document.getElementById(savedTab) ? savedTab : firstTab);
-
-  // CSV export
-  var csvDataEl = document.getElementById('csv-data');
-  var csvData = null;
-  if (csvDataEl) { try { csvData = JSON.parse(csvDataEl.textContent); } catch (e) { csvData = null; } }
-  document.querySelectorAll('[data-csv-section]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      if (!csvData) return;
-      var entry = csvData[btn.dataset.csvSection];
-      if (!entry) return;
-      var blob = new Blob([entry.csv], { type: 'text/csv;charset=utf-8;' });
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = entry.filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    tabBtns.forEach(function (b) {
+      b.classList.toggle('active', b.dataset.tab === id);
+      b.setAttribute('aria-selected', String(b.dataset.tab === id));
     });
-  });
+    tabPanels.forEach(function (p) { p.classList.toggle('active', p.id === id); });
+    try { localStorage.setItem('congress-tab', id); } catch (e) {}
+  }
+  tabBtns.forEach(function (b) { b.addEventListener('click', function () { activateTab(b.dataset.tab); }); });
+  var savedTab = null;
+  try { savedTab = localStorage.getItem('congress-tab'); } catch (e) {}
+  var firstTab = tabBtns.length ? tabBtns[0].dataset.tab : null;
+  if (firstTab) activateTab(savedTab && document.getElementById(savedTab) ? savedTab : firstTab);
 })();
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main page builder
+// Report page
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** One entry in the report picker and the new-disclosures chart. */
+export interface ReportRunLink {
+  label: string;      // "September 24, 2026"
+  href: string;       // relative to this report
+  date: string;       // ISO date of the run
+  newTrades?: number; // absent for runs from before the count was recorded
+}
 
 export interface HtmlReportOptions {
   report: AnalysisReport;
@@ -970,8 +698,78 @@ export interface HtmlReportOptions {
   dateStr?: string;
   /** How many days back from generation time to look when ranking Top Purchases / Committee-Relevant (default 30) */
   topWindowDays?: number;
-  /** True for trades disclosed since the previous run; those rows render gold. */
+  /** True for trades disclosed since the previous run; those rows are marked new. */
   isNewlyDisclosed?: (trade: FMPTrade) => boolean;
+  /** Date label of the run the new disclosures are measured against; absent on the first run. */
+  previousRunLabel?: string;
+  /** Every run, newest first, including this one: feeds the picker and the chart. */
+  runs?: ReportRunLink[];
+}
+
+const NUMBER_WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+const numberWord = (n: number) => NUMBER_WORDS[n] ?? String(n);
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const MAX_PER_FILER = 5;
+
+function freshHtml(
+  newly: Array<{ trade: FMPTrade; party: string | undefined }>,
+  previousRunLabel: string | undefined,
+  memberLink: MemberLinker | undefined,
+): string {
+  const since = previousRunLabel ? previousRunLabel.replace(/,\s*\d{4}$/, "") : "";
+  if (!previousRunLabel) {
+    return `<h1 id="fresh-h">This is the first report, so nothing is marked new yet.</h1>
+      <p class="lede">The next run will list every trade disclosed after this one.</p>`;
+  }
+  if (!newly.length) {
+    return `<h1 id="fresh-h">No new trades were disclosed since ${esc(since)}.</h1>
+      <p class="lede">The most unusual purchases of the last month and every trade on file are below.</p>`;
+  }
+
+  const groups = new Map<string, { name: string; party: string | undefined; url: string | null; rows: typeof newly }>();
+  for (const item of newly) {
+    const name = `${item.trade.firstName ?? ""} ${item.trade.lastName ?? ""}`.trim();
+    const url = memberLink?.(item.trade) ?? null;
+    const key = url ?? name;
+    if (!groups.has(key)) groups.set(key, { name, party: item.party, url, rows: [] });
+    groups.get(key)!.rows.push(item);
+  }
+  const ordered = [...groups.values()]
+    .map((g) => ({ ...g, rows: g.rows.sort((a, b) => (b.trade.transactionDate ?? "").localeCompare(a.trade.transactionDate ?? "")) }))
+    .sort((a, b) => b.rows.length - a.rows.length || (b.rows[0].trade.transactionDate ?? "").localeCompare(a.rows[0].trade.transactionDate ?? ""));
+
+  const sales = newly.filter((n) => sideLabel(n.trade.type) === "Sold").length;
+  const buys = newly.length - sales;
+  const oldest = newly.map((n) => n.trade.transactionDate).filter((d): d is string => !!d).sort()[0];
+  const m = ordered.length;
+
+  const filers = ordered.map((g) => {
+    const shown = g.rows.slice(0, MAX_PER_FILER);
+    const rest = g.rows.length - shown.length;
+    return `
+      <div class="filer">
+        <h2>${g.url ? `<a href="${esc(g.url)}">${esc(g.name)}</a>` : esc(g.name)} ${partyTagHtml(g.party)}<span class="count">${plural(g.rows.length, "trade")}</span></h2>
+        <ul class="filing-list">${shown.map(({ trade }) => {
+          const side = sideLabel(trade.type);
+          const phrase = trade.owner && trade.owner.toLowerCase() !== "self" ? ownerPhrase(trade.owner) : "";
+          const owner = phrase ? `, ${phrase.charAt(0).toLowerCase()}${phrase.slice(1)}` : "";
+          return `
+          <li>
+            <span class="side${side === "Sold" ? " sold" : ""}">${side}</span>
+            <span class="what">${trade.symbol ? `<b>${esc(trade.symbol)}</b>` : ""}<span class="desc">${esc(tidyAsset(trade.assetDescription))}</span></span>
+            <span class="size">${amountHtml(trade.amount)}</span>
+            <span class="when">Traded ${esc(shortDate(trade.transactionDate, THIS_YEAR))}${esc(owner)}</span>
+          </li>`;
+        }).join("")}${rest > 0 ? `
+          <li class="more-filed">${g.url ? `<a href="${esc(g.url)}">${plural(rest, "more trade")}</a>` : plural(rest, "more trade")} in this batch</li>` : ""}
+        </ul>
+      </div>`;
+  }).join("");
+
+  return `<h1 id="fresh-h">${numberWord(m)} ${m === 1 ? "member" : "members"} disclosed ${plural(newly.length, "trade")} since ${esc(since)}.</h1>
+      <p class="lede">${plural(buys, "purchase")} and ${plural(sales, "sale")}.${oldest ? ` Trade dates run back to ${esc(shortDate(oldest, THIS_YEAR))}, because members have up to 45 days to report.` : ""}</p>
+      <div class="filers">${filers}
+      </div>`;
 }
 
 export function buildHtmlReport(opts: HtmlReportOptions): string {
@@ -983,13 +781,14 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     dateStr = new Date(report.generatedAt).toISOString().split("T")[0],
     topWindowDays = 30,
     isNewlyDisclosed = () => false,
+    previousRunLabel,
+    runs = [],
   } = opts;
 
   const scoreLookup = buildScoreLookup(report);
 
   // Only rank trades from the last `topWindowDays` days (relative to report generation)
-  // for Top Purchases / Committee-Relevant, so these stay current instead of surfacing
-  // the same all-time high scorers indefinitely.
+  // so the ranking stays current instead of surfacing the same all-time high scorers.
   const windowCutoff = new Date(report.generatedAt);
   windowCutoff.setDate(windowCutoff.getDate() - topWindowDays);
   const isWithinWindow = (t: AnalyzedTrade): boolean => {
@@ -998,7 +797,6 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     return !isNaN(d.getTime()) && d >= windowCutoff;
   };
 
-  // Top purchases (sorted by score desc, within the recency window)
   const topPurchases = [...report.scoredTrades]
     .filter((t) => {
       const type = (t.trade.type || "").toLowerCase();
@@ -1007,11 +805,12 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     .sort((a, b) => b.score.overallScore - a.score.overallScore)
     .slice(0, 30);
 
-  // Committee-relevant trades (any type, within the recency window)
   const committeeRelevant = [...report.scoredTrades]
     .filter((t) => t.score.flags.hasCommitteeRelevance && isWithinWindow(t))
-    .sort((a, b) => b.score.factors.committeeRelevanceScore - a.score.factors.committeeRelevanceScore)
+    .sort((a, b) => b.score.overallScore - a.score.overallScore)
     .slice(0, 20);
+
+  const newly = [...purchaseTrades, ...salesTrades].filter(({ trade }) => isNewlyDisclosed(trade));
 
   const csvSections = {
     "top-purchases": { filename: `top-purchases-${dateStr}.csv`, csv: buildCsv(CARD_CSV_HEADERS, topPurchases.map(cardCsvRow)) },
@@ -1020,157 +819,185 @@ export function buildHtmlReport(opts: HtmlReportOptions): string {
     "recent-sales": { filename: `recent-sales-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, salesTrades.map(({ trade, party }) => saleCsvRow(trade, party, scoreLookup.get(tradeKey(trade))))) },
   };
 
-  const dateRange = (() => {
-    const dates = report.scoredTrades
-      .map((t) => t.trade.transactionDate)
-      .filter((d): d is string => !!d)
-      .sort();
-    if (!dates.length) return "";
-    return dates[0] === dates[dates.length - 1]
-      ? dates[0]
-      : `${dates[0]} – ${dates[dates.length - 1]}`;
-  })();
+  const dates = report.scoredTrades.map((t) => t.trade.transactionDate).filter((d): d is string => !!d).sort();
 
-  const navLink = indexUrl
-    ? `<a href="${esc(indexUrl)}">← Archive</a>`
-    : "";
+  const picker = runs.length
+    ? `<label class="run">Report for <select id="run">${runs.map((r) =>
+        `<option value="${esc(r.href)}"${r.date === dateStr ? " selected" : ""}>${esc(r.label)}${r.newTrades ? ` (${r.newTrades} new)` : ""}</option>`).join("")}</select></label>`
+    : `<span class="run">Report for ${esc(dateLabel)}</span>`;
 
-  const partyLinks = [
-    partyPageUrls?.republican ? `<a href="${esc(partyPageUrls.republican)}" class="party-nav party-nav-r">Republican</a>` : "",
-    partyPageUrls?.democrat   ? `<a href="${esc(partyPageUrls.democrat)}"   class="party-nav party-nav-d">Democrat</a>` : "",
-    partyPageUrls?.independent? `<a href="${esc(partyPageUrls.independent)}" class="party-nav">Independent</a>` : "",
-  ].filter(Boolean).join(" ");
+  const chartRuns = runs.filter((r) => r.newTrades != null).slice(0, 14).reverse();
+  const maxNew = Math.max(1, ...chartRuns.map((r) => r.newTrades ?? 0));
+  const chart = chartRuns.length > 1 ? `
+    <div>
+      <h2>New disclosures per report</h2>
+      <div class="runs" style="grid-template-columns: repeat(${chartRuns.length}, 1fr)">${chartRuns.map((r) => `
+        <a href="${esc(r.href)}"${r.date === dateStr ? ' aria-current="page"' : ""} title="${esc(r.label)}: ${plural(r.newTrades ?? 0, "new trade")}">
+          <span class="bar" style="height:${(((r.newTrades ?? 0) / maxNew) * 5.5).toFixed(2)}rem"></span><span class="d">${esc(shortDate(r.date))}</span>
+        </a>`).join("")}
+      </div>
+      <p class="runs-note">Each bar is one report. Taller means more trades were disclosed since the report before it. Select one to open it.</p>
+    </div>` : "";
+
+  const parties = [
+    partyPageUrls?.republican ? `<li><a href="${esc(partyPageUrls.republican)}"><span>Republicans</span><span class="n"></span></a></li>` : "",
+    partyPageUrls?.democrat ? `<li><a href="${esc(partyPageUrls.democrat)}"><span>Democrats</span><span class="n"></span></a></li>` : "",
+    partyPageUrls?.independent ? `<li><a href="${esc(partyPageUrls.independent)}"><span>Independents</span><span class="n"></span></a></li>` : "",
+    indexUrl ? `<li><a href="${esc(indexUrl)}"><span>All past reports</span><span class="n">${runs.length || ""}</span></a></li>` : "",
+  ].join("");
+
+  const rankedList = (key: string, list: AnalyzedTrade[], emptyText: string) => `
+      <ol class="ranked" data-list="${key}"${key === "top" ? "" : " hidden"}>${list.map((t, i) => renderPick(t, `pick-${key}-${i}`, exchangeMap, memberLink)).join("")}
+        <li class="empty"${list.length ? " hidden" : ""}>${emptyText}</li>
+      </ol>`;
 
   return `<!DOCTYPE html>
-<html lang="en" data-theme="dark">
+${HTML_OPEN}
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Congress Trades — ${esc(dateLabel)}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-  <style>${CSS}</style>
+  <title>Congress trades, ${esc(dateLabel)}</title>
+  ${themeHead(REPORT_CSS)}
 </head>
 <body>
 
-<header class="site-header">
-  <div>
-    <div class="site-title">Congress Trades</div>
-    <div class="site-subtitle">${esc(dateLabel)}${dateRange ? ` &nbsp;·&nbsp; ${esc(dateRange)}` : ""}</div>
-  </div>
-  <div class="header-right">
-    ${navLink}
-    ${partyLinks}
-    <button class="theme-btn" id="theme-btn">☀️ Light</button>
-  </div>
-</header>
+${siteHeader(indexUrl ?? "#", picker)}
 
 <main>
+  <section class="fresh-band" aria-labelledby="fresh-h">
+    <div class="wrap fresh">
+      ${freshHtml(newly, previousRunLabel, memberLink)}
+    </div>
+  </section>
 
-  <!-- Stats bar -->
-  <div class="stats-bar">
-    <span class="stat-item"><strong>${report.totalTradesAnalyzed}</strong> trades analyzed</span>
-    <span class="stat-sep">·</span>
-    <span class="stat-item"><strong>${purchaseTrades.length}</strong> purchases</span>
-    <span class="stat-sep">·</span>
-    <span class="stat-item"><strong>${salesTrades.length}</strong> sales</span>
-    <span class="stat-sep">·</span>
-    <span class="stat-item"><strong>${committeeRelevant.length}</strong> committee-relevant</span>
-    <span class="stat-sep">·</span>
-    <span class="stat-item">Generated ${new Date(report.generatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
-  </div>
+  <section class="unusual" id="unusual" aria-labelledby="unusual-h">
+    <div class="wrap">
+      <div class="band-head">
+        <div>
+          <h2 id="unusual-h">Most unusual purchases</h2>
+          <p>Trades from the last ${topWindowDays} days, ranked by how far they sit from what Congress usually buys: rarely traded stocks, bigger than the member's normal size, or in an industry their committee oversees.</p>
+        </div>
+        <div class="views">
+          <span class="seg" role="group" aria-label="Which trades">
+            <button type="button" data-view="top" data-csv="top-purchases" aria-pressed="true">All purchases</button>
+            <button type="button" data-view="committee" data-csv="committee-relevant" aria-pressed="false">Committee overlap</button>
+          </span>
+          <label class="check"><input type="checkbox" id="ticker-only"> Only trades with a ticker</label>
+          <button class="csv-btn" type="button" id="ranked-csv" data-csv-section="top-purchases">Download CSV</button>
+        </div>
+      </div>
+      ${rankedList("top", topPurchases, `No purchases in the last ${topWindowDays} days scored high enough to rank.`)}
+      ${rankedList("committee", committeeRelevant, `No trades in the last ${topWindowDays} days fall under the member's own committees.`)}
+      <div class="ranked-foot"><span id="ranked-count"></span><button type="button" id="show-more">Show 10 more</button></div>
+    </div>
+  </section>
 
-  <!-- Tab bar -->
-  <div class="tab-bar" role="tablist">
-    <button class="tab-btn" data-tab="tab-top" role="tab">Top Purchases (${topPurchases.length})</button>
-    ${committeeRelevant.length > 0 ? `<button class="tab-btn" data-tab="tab-committee" role="tab">Committee-Relevant (${committeeRelevant.length})</button>` : ""}
-    <button class="tab-btn" data-tab="tab-purchases" role="tab">Recent Purchases (${purchaseTrades.length})</button>
-    <button class="tab-btn" data-tab="tab-sales" role="tab">Recent Sales (${salesTrades.length})</button>
-  </div>
+  <section class="every" id="every" aria-labelledby="every-h">
+    <div class="wrap">
+      <div class="band-head">
+        <div>
+          <h2 id="every-h">Every trade</h2>
+          <p>All ${report.totalTradesAnalyzed.toLocaleString("en-US")} disclosed trades from ${esc(shortDate(dates[0], "any"))} to ${esc(shortDate(dates[dates.length - 1], "any"))}, newest trade first.${newly.length ? " Trades disclosed since the last report are marked new." : ""}</p>
+        </div>
+        <span class="seg" role="tablist" aria-label="Purchases or sales">
+          <button class="tab-btn" type="button" role="tab" data-tab="tab-purchases">Purchases ${purchaseTrades.length.toLocaleString("en-US")}</button>
+          <button class="tab-btn" type="button" role="tab" data-tab="tab-sales">Sales ${salesTrades.length.toLocaleString("en-US")}</button>
+        </span>
+      </div>
+      <div class="tab-panel" id="tab-purchases" role="tabpanel">
+        <section class="section" id="recent-purchases">
+          <div class="section-header">
+            ${csvButtonHtml("recent-purchases")}
+          </div>
+          ${tradeTableHtml(purchaseTrades, exchangeMap, memberLink, scoreLookup, isNewlyDisclosed)}
+        </section>
+      </div>
+      <div class="tab-panel" id="tab-sales" role="tabpanel">
+        <section class="section" id="recent-sales">
+          <div class="section-header">
+            ${csvButtonHtml("recent-sales")}
+          </div>
+          ${tradeTableHtml(salesTrades, exchangeMap, memberLink, scoreLookup, isNewlyDisclosed)}
+        </section>
+      </div>
+    </div>
+  </section>
 
-  <!-- Tab: Top Purchases -->
-  <div class="tab-panel" id="tab-top" role="tabpanel">
-    <section class="section">
-      <div class="section-header">
-        <h2 class="section-title">Top Purchases by Uniqueness Score</h2>
-        <span class="section-count">${topPurchases.length} trades — last ${topWindowDays} days</span>
-        ${csvButtonHtml("top-purchases")}
+  <section class="rest" aria-label="More">
+    <div class="wrap elsewhere">
+      <div>
+        <h2>Browse</h2>
+        <ul class="browse">${parties}</ul>
       </div>
-      <div class="card-grid">
-        ${topPurchases.map((t) => renderTradeCard(t, exchangeMap, memberLink)).join("\n        ")}
-      </div>
-    </section>
-  </div>
-
-  ${committeeRelevant.length > 0 ? `
-  <!-- Tab: Committee-Relevant -->
-  <div class="tab-panel" id="tab-committee" role="tabpanel">
-    <section class="section">
-      <div class="section-header">
-        <h2 class="section-title">Committee-Relevant Trades</h2>
-        <span class="section-count">${committeeRelevant.length} trades — traders with committee oversight of the stock's sector, last ${topWindowDays} days</span>
-        ${csvButtonHtml("committee-relevant")}
-      </div>
-      <div class="card-grid">
-        ${committeeRelevant.map((t) => renderTradeCard(t, exchangeMap, memberLink)).join("\n        ")}
-      </div>
-    </section>
-  </div>
-  ` : ""}
-
-  <!-- Tab: Recent Purchases -->
-  <div class="tab-panel" id="tab-purchases" role="tabpanel">
-    <section class="section">
-      <div class="section-header">
-        <h2 class="section-title">Recent Purchases</h2>
-        <span class="section-count">${purchaseTrades.length} trades</span>
-        ${csvButtonHtml("recent-purchases")}
-      </div>
-      <div class="sales-table-wrap">
-        <table>
-          <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
-          <tbody>
-            ${purchaseTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberLink, scoreLookup, isNewlyDisclosed(trade))).join("\n            ")}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </div>
-
-  <!-- Tab: Recent Sales -->
-  <div class="tab-panel" id="tab-sales" role="tabpanel">
-    <section class="section">
-      <div class="section-header">
-        <h2 class="section-title">Recent Sales</h2>
-        <span class="section-count">${salesTrades.length} trades</span>
-        ${csvButtonHtml("recent-sales")}
-      </div>
-      <div class="sales-table-wrap">
-        <table>
-          <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
-          <tbody>
-            ${salesTrades.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberLink, scoreLookup, isNewlyDisclosed(trade))).join("\n            ")}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </div>
-
+      ${chart}
+    </div>
+  </section>
 </main>
 
 <footer>
-  Scores reflect uniqueness signals; not investment advice.
+  Scores measure how unusual a trade is, not whether it is a good investment. Not investment advice.
 </footer>
 
 ${csvDataScript(csvSections)}
-<script>${JS}</script>
+<script>${THEME_JS}</script>
+<script>${REPORT_JS}</script>
 </body>
 </html>`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Member page builder
+// Member and party pages
 // ─────────────────────────────────────────────────────────────────────────────
+
+const LIST_PAGE_CSS = `
+  .list-page .section { padding-top: 2rem; }
+`;
+
+function listPage(opts: {
+  title: string;
+  headingHtml: string;
+  statsHtml: string;
+  crumbsHtml: string;
+  homeHref: string;
+  sectionsHtml: string;
+  csvSections: Record<string, { filename: string; csv: string }>;
+}): string {
+  return `<!DOCTYPE html>
+${HTML_OPEN}
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${opts.title}</title>
+  ${themeHead(LIST_PAGE_CSS)}
+</head>
+<body class="list-page">
+${siteHeader(opts.homeHref, `<nav class="crumbs" aria-label="Back">${opts.crumbsHtml}</nav>`)}
+<main>
+  <div class="page-head-band">
+    <div class="wrap page-head">
+      <h1 class="site-title">${opts.headingHtml}</h1>
+      <div class="stats-bar">${opts.statsHtml}</div>
+    </div>
+  </div>
+  <div class="wrap">
+    ${opts.sectionsHtml}
+  </div>
+</main>
+<footer>
+  Scores measure how unusual a trade is, not whether it is a good investment. Not investment advice.
+</footer>
+${csvDataScript(opts.csvSections)}
+<script>${THEME_JS}</script>
+</body>
+</html>`;
+}
+
+function crumbs(indexUrl: string | undefined, reportUrl: string, dateLabel: string): string {
+  return [
+    `<a href="${esc(reportUrl)}">Report for ${esc(dateLabel)}</a>`,
+    indexUrl ? `<a href="${esc(indexUrl)}">All reports</a>` : "",
+  ].filter(Boolean).join("");
+}
 
 export interface MemberPageOptions {
   memberName: string;
@@ -1191,62 +1018,43 @@ export interface MemberPageOptions {
 export function buildMemberPage(opts: MemberPageOptions): string {
   const {
     memberName, chamber, party, trades, dateLabel, reportUrl, indexUrl,
-    exchangeMap = new Map(), memberLink, scoreLookup,
+    exchangeMap = new Map(), scoreLookup,
     dateStr = new Date().toISOString().split("T")[0],
   } = opts;
 
-  const purchases = trades
-    .filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
-  const sales = trades
-    .filter((t) => (t.trade.type || "").toLowerCase().includes("sale"));
-
-  const pLabel = partyLabel(party);
-  const pClass = partyClass(party);
+  const purchases = trades.filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
+  const sales = trades.filter((t) => (t.trade.type || "").toLowerCase().includes("sale"));
   const memberSlug = opts.memberSlug ?? memberKey(memberName);
-
-  const navLinks = [
-    indexUrl ? `<a href="${esc(indexUrl)}">← Archive</a>` : "",
-    `<a href="${esc(reportUrl)}">← Report</a>`,
-  ].filter(Boolean).join(" &nbsp;·&nbsp; ");
 
   const csvSections = {
     [`${memberSlug}-purchases`]: { filename: `${memberSlug}-purchases-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, purchases.map(({ trade, party: p }) => saleCsvRow(trade, p, scoreLookup?.get(tradeKey(trade))))) },
     [`${memberSlug}-sales`]: { filename: `${memberSlug}-sales-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, sales.map(({ trade, party: p }) => saleCsvRow(trade, p, scoreLookup?.get(tradeKey(trade))))) },
   };
 
-  function tradeTable(rows: typeof trades, title: string, csvKey: string): string {
+  function table(rows: typeof trades, title: string, id: string, csvKey: string): string {
     if (!rows.length) return "";
     return `
-  <section class="section">
+  <section class="section" id="${id}">
     <div class="section-header">
       <h2 class="section-title">${esc(title)}</h2>
-      <span class="section-count">${rows.length} trades</span>
+      <span class="section-count">${plural(rows.length, "trade")}</span>
       ${csvButtonHtml(csvKey)}
     </div>
     <div class="sales-table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Asset</th></tr></thead>
+        <thead><tr><th>Traded</th><th>Ticker</th><th>Amount</th><th>Asset</th></tr></thead>
         <tbody>
           ${rows.map(({ trade }) => {
-            const rawSym = trade.symbol || "N/A";
-            const sym = esc(rawSym);
-            const exchange = trade.symbol ? exchangeMap.get(trade.symbol) : undefined;
-            const tvUrl = trade.symbol ? tradingViewUrl(trade.symbol, exchange) : null;
-            const symCell = tvUrl
-              ? `<a class="symbol-link" href="${esc(tvUrl)}" target="_blank" rel="noopener noreferrer">${sym}</a>`
-              : sym;
-            const amount = esc(formatAmount(trade.amount));
-            const date = esc(trade.transactionDate || "");
-            const desc = esc(trade.assetDescription || "");
-            const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? esc(trade.owner) : "";
+            const owner = trade.owner && trade.owner.toLowerCase() !== "self" ? trade.owner : "";
+            const analyzed = scoreLookup?.get(tradeKey(trade));
+            const signals = [analyzed ? traderBadgesHtml(analyzed.score) : "", optionTagHtml(trade), owner ? `<span class="owner-tag" title="${esc(ownerCode(owner).title)}">${esc(owner)}</span>` : ""].filter(Boolean).join(" ");
             const filingLink = filingLinkHtml(trade);
-            const optionTag = optionTagHtml(trade);
             return `
           <tr>
-            <td class="sale-date">${date}</td>
-            <td class="sale-sym">${symCell}${optionTag ? ` ${optionTag}` : ""}</td>
-            <td class="sale-amount">${amount}</td>
-            <td class="sale-desc">${desc}${owner ? ` <span class="owner-tag">${owner}</span>` : ""}${filingLink ? ` ${filingLink}` : ""}</td>
+            <td class="sale-date">${esc(shortDate(trade.transactionDate, THIS_YEAR))}</td>
+            <td class="sale-sym">${symbolHtml(trade, exchangeMap)}</td>
+            <td class="sale-amount">${amountHtml(trade.amount)}</td>
+            <td class="sale-desc">${esc(tidyAsset(trade.assetDescription))}${signals ? ` ${signals}` : ""}${filingLink ? ` ${filingLink}` : ""}</td>
           </tr>`;
           }).join("")}
         </tbody>
@@ -1255,50 +1063,16 @@ export function buildMemberPage(opts: MemberPageOptions): string {
   </section>`;
   }
 
-  return `<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${esc(chamber)} ${esc(memberName)} — ${esc(dateLabel)}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-  <style>${CSS}</style>
-</head>
-<body>
-<header class="site-header">
-  <div>
-    <div class="site-title">${esc(chamber)} ${esc(memberName)}${pLabel ? ` <span class="party-tag ${pClass}">${esc(pLabel)}</span>` : ""}</div>
-    <div class="site-subtitle">${esc(dateLabel)}</div>
-  </div>
-  <div class="header-right">
-    ${navLinks}
-    <button class="theme-btn" id="theme-btn">☀️ Light</button>
-  </div>
-</header>
-<main>
-  <div class="stats-bar">
-    <span class="stat-item"><strong>${purchases.length}</strong> purchases</span>
-    <span class="stat-sep">·</span>
-    <span class="stat-item"><strong>${sales.length}</strong> sales</span>
-    <span class="stat-sep">·</span>
-    <span class="stat-item"><strong>${trades.length}</strong> total</span>
-  </div>
-  ${tradeTable(purchases, "Purchases", `${memberSlug}-purchases`)}
-  ${tradeTable(sales, "Sales", `${memberSlug}-sales`)}
-</main>
-<footer>
-  Scores reflect uniqueness signals; not investment advice.
-</footer>
-${csvDataScript(csvSections)}
-<script>${JS}</script>
-</body>
-</html>`;
+  return listPage({
+    title: `${esc(chamber)} ${esc(memberName)}, ${esc(dateLabel)}`,
+    headingHtml: `${esc(chamber)} ${esc(memberName)} ${partyTagHtml(party)}`,
+    statsHtml: `<span><strong>${purchases.length}</strong> purchases</span><span><strong>${sales.length}</strong> sales</span><span><strong>${trades.length}</strong> total</span>`,
+    crumbsHtml: crumbs(indexUrl, reportUrl, dateLabel),
+    homeHref: indexUrl ?? reportUrl,
+    sectionsHtml: table(purchases, "Purchases", "purchases", `${memberSlug}-purchases`) + table(sales, "Sales", "sales", `${memberSlug}-sales`),
+    csvSections,
+  });
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Party page builder
-// ─────────────────────────────────────────────────────────────────────────────
 
 export interface PartyPageOptions {
   partyLabel: string; // "Republican" | "Democrat" | "Independent"
@@ -1314,84 +1088,40 @@ export interface PartyPageOptions {
 
 export function buildPartyPage(opts: PartyPageOptions): string {
   const {
-    partyLabel, trades, dateLabel, reportUrl, indexUrl,
+    partyLabel: label, trades, dateLabel, reportUrl, indexUrl,
     exchangeMap = new Map(), memberLink, scoreLookup,
     dateStr = new Date().toISOString().split("T")[0],
   } = opts;
 
-  const purchases = trades
-    .filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
-  const sales = trades
-    .filter((t) => (t.trade.type || "").toLowerCase().includes("sale"));
+  const purchases = trades.filter((t) => { const ty = (t.trade.type || "").toLowerCase(); return ty.includes("purchase") || ty.includes("exchange"); });
+  const sales = trades.filter((t) => (t.trade.type || "").toLowerCase().includes("sale"));
 
-  const navLinks = [
-    indexUrl ? `<a href="${esc(indexUrl)}">← Archive</a>` : "",
-    `<a href="${esc(reportUrl)}">← Report</a>`,
-  ].filter(Boolean).join(" &nbsp;·&nbsp; ");
-
-  const partySlug = partyLabel.toLowerCase();
+  const partySlug = label.toLowerCase();
   const csvSections = {
     [`${partySlug}-purchases`]: { filename: `${partySlug}-purchases-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, purchases.map(({ trade, party }) => saleCsvRow(trade, party, scoreLookup?.get(tradeKey(trade))))) },
     [`${partySlug}-sales`]: { filename: `${partySlug}-sales-${dateStr}.csv`, csv: buildCsv(SALE_CSV_HEADERS, sales.map(({ trade, party }) => saleCsvRow(trade, party, scoreLookup?.get(tradeKey(trade))))) },
   };
 
-  function tradeTable(rows: typeof trades, title: string, csvKey: string): string {
+  function table(rows: typeof trades, title: string, id: string, csvKey: string): string {
     if (!rows.length) return "";
     return `
-  <section class="section">
+  <section class="section" id="${id}">
     <div class="section-header">
       <h2 class="section-title">${esc(title)}</h2>
-      <span class="section-count">${rows.length} trades</span>
+      <span class="section-count">${plural(rows.length, "trade")}</span>
       ${csvButtonHtml(csvKey)}
     </div>
-    <div class="sales-table-wrap">
-      <table>
-        <thead><tr><th>Date</th><th>Symbol</th><th>Amount</th><th>Trader</th><th>Asset</th></tr></thead>
-        <tbody>
-          ${rows.map(({ trade, party }) => renderSaleRow(trade, party, exchangeMap, memberLink, scoreLookup)).join("\n          ")}
-        </tbody>
-      </table>
-    </div>
+    ${tradeTableHtml(rows, exchangeMap, memberLink, scoreLookup)}
   </section>`;
   }
 
-  return `<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${esc(partyLabel)} Trades — ${esc(dateLabel)}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-  <style>${CSS}</style>
-</head>
-<body>
-<header class="site-header">
-  <div>
-    <div class="site-title">${esc(partyLabel)} Trades</div>
-    <div class="site-subtitle">${esc(dateLabel)}</div>
-  </div>
-  <div class="header-right">
-    ${navLinks}
-    <button class="theme-btn" id="theme-btn">☀️ Light</button>
-  </div>
-</header>
-<main>
-  <div class="stats-bar">
-    <span class="stat-item"><strong>${purchases.length}</strong> purchases</span>
-    <span class="stat-sep">·</span>
-    <span class="stat-item"><strong>${sales.length}</strong> sales</span>
-    <span class="stat-sep">·</span>
-    <span class="stat-item"><strong>${trades.length}</strong> total</span>
-  </div>
-  ${tradeTable(purchases, "Purchases", `${partySlug}-purchases`)}
-  ${tradeTable(sales, "Sales", `${partySlug}-sales`)}
-</main>
-<footer>
-  Scores reflect uniqueness signals; not investment advice.
-</footer>
-${csvDataScript(csvSections)}
-<script>${JS}</script>
-</body>
-</html>`;
+  return listPage({
+    title: `${esc(label)} trades, ${esc(dateLabel)}`,
+    headingHtml: `${esc(label)} trades`,
+    statsHtml: `<span><strong>${purchases.length.toLocaleString("en-US")}</strong> purchases</span><span><strong>${sales.length.toLocaleString("en-US")}</strong> sales</span><span><strong>${trades.length.toLocaleString("en-US")}</strong> total</span>`,
+    crumbsHtml: crumbs(indexUrl, reportUrl, dateLabel),
+    homeHref: indexUrl ?? reportUrl,
+    sectionsHtml: table(purchases, "Purchases", "purchases", `${partySlug}-purchases`) + table(sales, "Sales", "sales", `${partySlug}-sales`),
+    csvSections,
+  });
 }

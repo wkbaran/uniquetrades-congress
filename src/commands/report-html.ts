@@ -385,6 +385,18 @@ export const reportHtmlCommand = new Command("report:html")
       }
 
       // ── Generate report HTML ─────────────────────────────────────────────
+      // The picker and chart list every run including this one, which is not
+      // in the manifest until after the report is written.
+      const runs = [
+        { date: dateStr, label: runDateLabel, file: reportRelPath, newTrades: filingBaseline ? newlyDisclosed.length : undefined },
+        ...priorManifest.filter((e) => e.date !== dateStr).map((e) => ({ date: e.date, label: e.dateLabel, file: e.file, newTrades: e.newTrades })),
+      ]
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .map((r) => ({ date: r.date, label: r.label, href: `../${r.file}`, newTrades: r.newTrades }));
+      const previousRunLabel = filingBaseline
+        ? priorManifest.filter((e) => e.date < dateStr).sort((a, b) => b.date.localeCompare(a.date))[0]?.dateLabel
+        : undefined;
+
       const html = buildHtmlReport({
         report,
         salesTrades,
@@ -397,6 +409,8 @@ export const reportHtmlCommand = new Command("report:html")
         dateStr,
         topWindowDays,
         isNewlyDisclosed,
+        previousRunLabel,
+        runs,
       });
 
       await fs.writeFile(path.join(dateDir, reportFile), html, "utf-8");
