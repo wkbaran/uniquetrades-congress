@@ -10,6 +10,7 @@ Pulls every stock trade members disclose straight from the House and Senate, sco
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
 ![Public data only](https://img.shields.io/badge/data-public%20domain-6f42c1)
 ![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 [How it works](#how-it-works) · [Quick start](#quick-start) · [Scoring](docs/SCORING.md) · [CLI](docs/CLI.md) · [OCR](docs/OCR.md) · [Publishing](docs/PUBLISHING.md)
 
@@ -70,6 +71,10 @@ Add `--publish` to upload the site to S3, or skip OCR with `--no-ocr` if you don
 - [OCR](docs/OCR.md): reading scanned paper filings, accuracy, and the catch-up command
 - [Publishing](docs/PUBLISHING.md): AWS hosting, scheduled runs, and Docker
 - [Sector and industry mapping](docs/sector-industry-mapping.md): how committees map to industries
+
+## License
+
+[AGPL-3.0](LICENSE). You can use, change and self-host it. If you run a modified version as a public site, you must publish your changes under the same license.
 
 ## Disclaimer
 
