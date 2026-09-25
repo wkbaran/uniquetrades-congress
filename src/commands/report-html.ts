@@ -31,6 +31,7 @@ import { buildIndexPage, buildHomePage, loadManifest, upsertManifest, rebuildMan
 import type { ManifestSymbol, ReportManifestEntry } from "../output/index-page.js";
 import { createNewlyDisclosedPredicate, filingDateIso, maxFilingDate } from "../utils/filing-date.js";
 import { publishOutput } from "../publish.js";
+import { ROOT_ICONS } from "../output/icons.js";
 import { loadData, getLatestReport, getDataAge } from "../utils/storage.js";
 import type { FMPTrade } from "../types/index.js";
 
@@ -62,11 +63,15 @@ async function loadExchangeMap(): Promise<Map<string, string>> {
 
 /**
  * The archive lists every report; the site root forwards to the newest one,
- * so the default page is always the latest report.
+ * so the default page is always the latest report. The root also holds the
+ * icons that browsers and iOS look for there.
  */
 async function writeIndexPages(webDir: string, manifest: ReportManifestEntry[]): Promise<void> {
   await fs.writeFile(path.join(webDir, "archive.html"), buildIndexPage(manifest), "utf-8");
   await fs.writeFile(path.join(webDir, "index.html"), buildHomePage(manifest), "utf-8");
+  for (const [file, base64] of Object.entries(ROOT_ICONS)) {
+    await fs.writeFile(path.join(webDir, file), Buffer.from(base64, "base64"));
+  }
 }
 
 export const reportHtmlCommand = new Command("report:html")

@@ -857,7 +857,7 @@ ${HTML_OPEN}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Congress trades, ${esc(dateLabel)}</title>
-  ${themeHead(REPORT_CSS)}
+  ${themeHead(REPORT_CSS, "../")}
 </head>
 <body>
 
@@ -968,7 +968,7 @@ ${HTML_OPEN}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${opts.title}</title>
-  ${themeHead(LIST_PAGE_CSS)}
+  ${themeHead(LIST_PAGE_CSS, "../")}
 </head>
 <body class="list-page">
 ${siteHeader(opts.homeHref, `<nav class="crumbs" aria-label="Back">${opts.crumbsHtml}</nav>`)}

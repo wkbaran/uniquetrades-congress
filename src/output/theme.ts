@@ -13,6 +13,26 @@
 /** "Ink and violet": the site's default palette (ground, ink, signal). */
 export const DEFAULT_PALETTE = ["#15162b", "#e6e4f5", "#b69bff"] as const;
 
+/**
+ * The favicon: a Capitol dome in the accent over a colonnade in ink, on the
+ * ground. {g}, {i} and {s} take the palette's three colours, so the tab icon
+ * follows the picker like the rest of the page.
+ */
+export const FAVICON_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+  '<rect width="32" height="32" rx="7" fill="{g}"/>' +
+  '<rect x="15" y="4" width="2" height="4" rx="1" fill="{s}"/>' +
+  '<path d="M8 16a8 8 0 0 1 16 0z" fill="{s}"/>' +
+  '<path d="M9 17.5h14v6H9zM6 25h20v3H6z" fill="{i}"/>' +
+  '<path d="M11.4 19h1.4v4.5h-1.4zM15.3 19h1.4v4.5h-1.4zM19.2 19h1.4v4.5h-1.4z" fill="{g}"/>' +
+  "</svg>";
+
+/** The favicon in one palette. iOS rounds home-screen icons itself, so the Apple icon asks for square corners. */
+export function faviconSvg(colors: readonly string[], square = false): string {
+  const svg = FAVICON_SVG.replace(/\{g\}/g, colors[0]).replace(/\{i\}/g, colors[1]).replace(/\{s\}/g, colors[2]);
+  return square ? svg.replace(' rx="7"', "") : svg;
+}
+
 const FONT_HREF =
   "https://fonts.googleapis.com/css2?family=Instrument+Sans:wdth,wght@75..100,400..700&display=swap";
 
@@ -21,6 +41,7 @@ const PALETTE_JS = `
 (function () {
   var KEY = "congress-trades.palette";
   var root = document.documentElement;
+  var ICON = ${JSON.stringify(FAVICON_SVG)};
   try { if (localStorage.getItem("congress-theme") === "light") root.setAttribute("data-theme", "light"); } catch (e) {}
   var PRESETS = [
     { name: "Ink and violet", colors: ["#15162b", "#e6e4f5", "#b69bff"] },
@@ -43,6 +64,9 @@ const PALETTE_JS = `
     root.style.setProperty("--p-ground", c[0]);
     root.style.setProperty("--p-ink", c[1]);
     root.style.setProperty("--p-signal", c[2]);
+    var icon = document.getElementById("favicon");
+    if (icon) icon.setAttribute("href", "data:image/svg+xml," + encodeURIComponent(
+      ICON.replace(/\{g\}/g, c[0]).replace(/\{i\}/g, c[1]).replace(/\{s\}/g, c[2])));
   }
   function save(c) { try { localStorage.setItem(KEY, JSON.stringify(c)); } catch (e) {} }
   var colors = read();
@@ -140,9 +164,14 @@ export const THEME_JS = `
 })();
 `;
 
-/** Everything a page needs in <head> after its <title>. */
-export function themeHead(extraCss = ""): string {
-  return `<link rel="preconnect" href="https://fonts.googleapis.com">
+/**
+ * Everything a page needs in <head> after its <title>. `root` is the path back
+ * to the site root ("../" from a dated report folder), where the static icons live.
+ */
+export function themeHead(extraCss = "", root = ""): string {
+  return `<link rel="icon" id="favicon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(faviconSvg(DEFAULT_PALETTE))}">
+  <link rel="apple-touch-icon" href="${root}apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="${FONT_HREF}">
   <script>${PALETTE_JS}</script>

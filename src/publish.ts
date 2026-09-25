@@ -18,6 +18,8 @@ const MIME_TYPES: Record<string, string> = {
   ".css":  "text/css; charset=utf-8",
   ".js":   "text/javascript; charset=utf-8",
   ".txt":  "text/plain; charset=utf-8",
+  ".png":  "image/png",
+  ".ico":  "image/x-icon",
 };
 
 function mimeType(file: string): string {

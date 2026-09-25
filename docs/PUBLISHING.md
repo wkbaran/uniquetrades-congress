@@ -7,6 +7,8 @@ output/web/
   index.html            forwards to the newest report
   archive.html          every report, newest first
   manifest.json         run history: dates, counts, what was new
+  favicon.ico           icons for browsers and iOS home screens
+  apple-touch-icon.png  (regenerate with scripts/make-icons.mjs)
   2026-09-24/
     report.html         the daily briefing
     member-<name>.html  one page per member
